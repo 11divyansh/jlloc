@@ -1,0 +1,30 @@
+plugins {
+    id 'java'
+}
+
+allprojects {
+    group = 'com.jlloc'
+    version = '0.1.0-SNAPSHOT'
+
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    apply plugin: 'java'
+
+    java {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+
+    test {
+        useJUnitPlatform()
+    }
+
+    dependencies {
+        testImplementation platform('org.junit:junit-bom:5.10.2')
+        testImplementation 'org.junit.jupiter:junit-jupiter'
+    }
+}

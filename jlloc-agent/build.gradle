@@ -1,0 +1,20 @@
+// CRITICAL: keep this module's dependencies minimal.
+// This jar gets loaded via -javaagent into EVERY java process on the
+// developer's machine (Spring Boot apps, Elasticsearch, Maven builds,
+// even IntelliJ itself). Every extra dependency here is extra startup
+// latency multiplied across every JVM the developer launches all day.
+
+dependencies {
+    implementation project(':jlloc-common')
+}
+
+jar {
+    manifest {
+        attributes(
+            'Premain-Class': 'com.jlloc.agent.AgentMain',
+            'Agent-Class': 'com.jlloc.agent.AgentMain',
+            'Can-Redefine-Classes': 'true',
+            'Can-Retransform-Classes': 'true'
+        )
+    }
+}

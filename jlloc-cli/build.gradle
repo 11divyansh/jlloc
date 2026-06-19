@@ -1,0 +1,8 @@
+apply plugin: 'application'
+dependencies {
+    implementation project(':jlloc-common')
+}
+
+application {
+    mainClass = 'com.jlloc.cli.CliMain'
+}

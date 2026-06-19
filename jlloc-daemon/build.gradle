@@ -1,0 +1,12 @@
+apply plugin: 'application'
+dependencies {
+    implementation project(':jlloc-common')
+
+    // Cross-platform system memory / CPU reading (Linux, Mac, Windows)
+    // Avoids us hand-parsing /proc/meminfo, shelling out to vm_stat, etc.
+    implementation 'com.github.oshi:oshi-core:6.6.5'
+}
+
+application {
+    mainClass = 'com.jlloc.daemon.DaemonMain'
+}

@@ -1,0 +1,9 @@
+// jlloc-common holds shared data classes used by daemon, agent and cli.
+// It must stay dependency-free (besides Java itself) so that jlloc-agent,
+// which gets injected into every JVM on the machine, stays small and fast
+// to load. Pulling in heavy libraries here would slow down every single
+// Java app on the developer's machine at startup.
+
+dependencies {
+    // intentionally empty for now
+}

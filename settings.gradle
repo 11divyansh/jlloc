@@ -1,0 +1,6 @@
+rootProject.name = 'jlloc'
+
+include 'jlloc-common'
+include 'jlloc-daemon'
+include 'jlloc-agent'
+include 'jlloc-cli'

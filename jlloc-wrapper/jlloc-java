@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# jlloc-java — drop-in replacement for the `java` command.
+# Asks the jlloc daemon for a heap budget before launching the real JVM.
+#
+# Phase 2 will implement the actual socket call to the daemon.
+# For now this just passes through to the real java binary unchanged.
+
+REAL_JAVA="$(command -v java)"
+
+echo "[jlloc-wrapper] would request heap budget from daemon here" >&2
+
+exec "$REAL_JAVA" "$@"
