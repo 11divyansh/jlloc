@@ -58,4 +58,4 @@ cmake --build build
 
 ## License
 
-TBD — closed source for now during early development.
+[Apache 2.0](LICENSE) (open-source, enterprise-friendly)
