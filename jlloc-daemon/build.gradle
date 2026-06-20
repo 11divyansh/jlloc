@@ -5,8 +5,9 @@ dependencies {
     // Cross-platform system memory / CPU reading (Linux, Mac, Windows)
     // Avoids us hand-parsing /proc/meminfo, shelling out to vm_stat, etc.
     implementation 'com.github.oshi:oshi-core:6.6.5'
+    applicationDefaultJvmArgs = ['--add-modules', 'jdk.attach']
 }
 
 application {
-    mainClass = 'com.jlloc.daemon.DaemonMain'
+    mainClass = 'com.jlloc.daemon.JmxConnector'
 }
