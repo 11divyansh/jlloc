@@ -9,5 +9,6 @@ dependencies {
 }
 
 application {
-    mainClass = 'com.jlloc.daemon.JmxConnector'
+    mainClass = project.findProperty("mainClass")
+            ?: "com.jlloc.daemon.JmxConnector"
 }

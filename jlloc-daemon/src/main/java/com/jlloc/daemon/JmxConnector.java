@@ -7,7 +7,6 @@ import javax.management.remote.JMXConnector;
 import javax.management.remote.JMXConnectorFactory;
 import javax.management.remote.JMXServiceURL;
 import java.io.IOException;
-import java.lang.management.ManagementFactory;
 import java.util.List;
 
 import com.sun.tools.attach.VirtualMachine;
@@ -127,12 +126,6 @@ public class JmxConnector implements AutoCloseable {
 
     public record GcStats(long collectionCount, long collectionTimeMs) {}
 
-    /**
-     * Quick manual test — point this at any JVM PID on your machine
-     * (run `jps` in a terminal to find one) and you'll see real heap
-     * numbers come back. This is the "does it actually work" check
-     * before we wire it into the daemon's watch loop.
-     */
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
             System.out.println("Attachable JVMs on this machine:");
