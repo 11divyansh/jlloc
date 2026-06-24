@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "_comment": "Each entry is a known JVM-based process kind. 'match' controls how nameContains entries are tested: contains (default), equals, prefix, suffix, or regex. 'category' is a freeform string, not a fixed enum - new entries don't require a code change. priorityWeight is a plain number the budget engine can do arithmetic with directly.",
+
+  "fingerprints": [
+    {
+      "id": "jlloc-daemon",
+      "category": "jlloc-self",
+      "match": "contains",
+      "nameContains": ["com.jlloc.daemon.DaemonMain"],
+      "systemPropertyMarkers": [],
+      "priorityWeight": 0
+    },
+    {
+      "id": "elasticsearch",
+      "category": "search-engine",
+      "match": "contains",
+      "nameContains": ["org.elasticsearch.bootstrap"],
+      "systemPropertyMarkers": ["es.path.home"],
+      "priorityWeight": 80
+    },
+    {
+      "id": "activemq",
+      "category": "message-broker",
+      "match": "contains",
+      "nameContains": ["activemq", "org.apache.activemq"],
+      "systemPropertyMarkers": ["activemq.home"],
+      "priorityWeight": 50
+    },
+    {
+      "id": "kafka",
+      "category": "message-broker",
+      "match": "contains",
+      "nameContains": ["kafka.Kafka"],
+      "systemPropertyMarkers": [],
+      "priorityWeight": 80
+    },
+    {
+      "id": "rabbitmq-java-client-host",
+      "category": "message-broker",
+      "match": "contains",
+      "nameContains": ["com.rabbitmq"],
+      "systemPropertyMarkers": [],
+      "priorityWeight": 50
+    },
+    {
+      "id": "cassandra",
+      "category": "database",
+      "match": "contains",
+      "nameContains": ["org.apache.cassandra"],
+      "systemPropertyMarkers": ["cassandra.config"],
+      "priorityWeight": 80
+    },
+    {
+      "id": "solr",
+      "category": "search-engine",
+      "match": "contains",
+      "nameContains": ["org.apache.solr"],
+      "systemPropertyMarkers": [],
+      "priorityWeight": 80
+    },
+    {
+      "id": "spring-boot",
+      "category": "application",
+      "match": "contains",
+      "nameContains": ["org.springframework.boot.loader"],
+      "systemPropertyMarkers": ["spring.application.name"],
+      "priorityWeight": 20
+    },
+    {
+      "id": "quarkus",
+      "category": "application",
+      "match": "contains",
+      "nameContains": ["io.quarkus.bootstrap"],
+      "systemPropertyMarkers": [],
+      "priorityWeight": 20
+    },
+    {
+      "id": "micronaut",
+      "category": "application",
+      "match": "contains",
+      "nameContains": ["io.micronaut"],
+      "systemPropertyMarkers": [],
+      "priorityWeight": 20
+    },
+    {
+      "id": "maven",
+      "category": "build-tool",
+      "match": "contains",
+      "nameContains": ["org.apache.maven.cli"],
+      "systemPropertyMarkers": [],
+      "priorityWeight": 1
+    },
+    {
+      "id": "gradle",
+      "category": "build-tool",
+      "match": "contains",
+      "nameContains": ["org.gradle"],
+      "systemPropertyMarkers": [],
+      "priorityWeight": 1
+    },
+    {
+      "id": "intellij",
+      "category": "ide",
+      "match": "contains",
+      "nameContains": ["com.intellij", "org.jetbrains"],
+      "systemPropertyMarkers": [],
+      "priorityWeight": 1
+    },
+    {
+      "id": "spring-tool-suite",
+      "category": "ide",
+      "match": "contains",
+      "nameContains": ["org.eclipse", "SpringToolSuite", "sts-"],
+      "systemPropertyMarkers": [],
+      "priorityWeight": 1
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -25,8 +26,13 @@ public class JvmProcessWatcher {
         return t;
     });
 
-    // PID -> info we've already seen, so we can diff against the next poll
-    private final Map<Long, DetectedJvm> knownJvms = new HashMap<>();
+    // ConcurrentHashMap, not HashMap: this gets read by the CLI thread
+    // and the budget engine thread while the watcher thread is still
+    // writing to it. A plain HashMap under concurrent read/write is a
+    // real correctness bug waiting to happen (lost updates, infinite
+    // loops during resize) - cheap to get right now, expensive to
+    // debug later once three threads are touching it in production use.
+    private final Map<Long, DetectedJvm> knownJvms = new ConcurrentHashMap<>();
 
     private Consumer<DetectedJvm> onJvmStarted = jvm -> {};
     private Consumer<DetectedJvm> onJvmStopped = jvm -> {};
@@ -68,6 +74,9 @@ public class JvmProcessWatcher {
      * One discovery cycle: list every attachable JVM right now,
      * compare against what we knew last time, fire callbacks for
      * anything that changed.
+     *
+     * package-private (not private) so a unit test can call this
+     * directly without waiting on the real 2-second scheduler.
      */
     void pollOnce() {
         Set<Long> currentPids = new HashSet<>();
@@ -78,13 +87,14 @@ public class JvmProcessWatcher {
                 pid = Long.parseLong(descriptor.id());
             } catch (NumberFormatException e) {
                 // Some platforms report non-numeric VM identifiers for
-                // certain embedded/attach scenarios; skipping those rather
+                // certain embedded/attach scenarios; skip those rather
                 // than crash the whole watch loop over one weird entry.
                 continue;
             }
 
-            // Don't report ourselves, the daemon is itself a JVM and
-            // would otherwise show up in its own process list.
+            // Don't report ourselves — the daemon is itself a JVM and
+            // would otherwise show up in its own process list, which
+            // is noise nobody wants in `jlloc status`.
             if (pid == ProcessHandle.current().pid()) {
                 continue;
             }
@@ -112,22 +122,11 @@ public class JvmProcessWatcher {
 
     /**
      * Minimal identity of a JVM process, before any classification.
-     * displayName here is whatever VirtualMachine.list() reports,
+     * displayName here is whatever VirtualMachine.list() reports —
      * usually the main class or jar name, e.g.
      * "org.springframework.boot.loader.launch.JarLauncher" or
-     * "/path/to/order-service.jar".
+     * "/path/to/order-service.jar". ProcessFingerprinter turns this
+     * raw string into a real classification.
      */
-    public record DetectedJvm(long pid, String displayName, Instant detectedAt) {}
-
-    public static void main(String[] args) throws InterruptedException {
-        JvmProcessWatcher watcher = new JvmProcessWatcher();
-
-        watcher.onJvmStarted(jvm -> System.out.printf("[+] JVM started  pid=%-8d %s%n", jvm.pid(), jvm.displayName()));
-        watcher.onJvmStopped(jvm -> System.out.printf("[-] JVM stopped  pid=%-8d %s%n", jvm.pid(), jvm.displayName()));
-
-        System.out.println("Watching for JVM start/stop... (Ctrl+C to exit)");
-        watcher.start();
-
-        Thread.currentThread().join();
-    }
+    public record DetectedJvm(long pid, String displayName, Instant detectedAt) { }
 }
