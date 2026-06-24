@@ -32,14 +32,58 @@ public class JmxConnector implements AutoCloseable {
      * Attaches to the target JVM and opens a JMX connection.
      * Must be called before any read* methods.
      */
+    /**
+     * Probes whether a PID is actually reachable, instead of assuming
+     * every JVM supports attach + JMX. Real reasons this can fail:
+     * the target was started with -XX:+DisableAttachMechanism, it's
+     * owned by another OS user / requires elevated permissions, or
+     * it's some embedded/custom runtime that doesn't expose the
+     * Attach API the way standard HotSpot does. We discover this
+     * once per PID and record it, rather than letting every caller
+     * independently try-catch its way around the same failure modes.
+     */
+    public static JvmCapabilities probeCapabilities(long pid) {
+        com.sun.tools.attach.VirtualMachine vm;
+        try {
+            vm = com.sun.tools.attach.VirtualMachine.attach(String.valueOf(pid));
+        } catch (com.sun.tools.attach.AttachNotSupportedException e) {
+            return JvmCapabilities.none("attach not supported (e.g. -XX:+DisableAttachMechanism, or a non-HotSpot runtime)");
+        } catch (IOException e) {
+            return JvmCapabilities.none("attach failed: " + e.getMessage() + " (often a permissions issue, e.g. process owned by another user)");
+        }
+
+        try {
+            String connectorAddress = vm.getAgentProperties()
+                    .getProperty("com.sun.management.jmxremote.localConnectorAddress");
+            if (connectorAddress == null) {
+                connectorAddress = vm.startLocalManagementAgent();
+            }
+            if (connectorAddress == null) {
+                return JvmCapabilities.attachOnly("attach succeeded but JMX management agent could not be started");
+            }
+            return JvmCapabilities.full();
+        } catch (Exception e) {
+            return JvmCapabilities.attachOnly("attach succeeded but JMX connection failed: " + e.getMessage());
+        } finally {
+            try {
+                vm.detach();
+            } catch (IOException ignored) {
+                // best-effort cleanup of the probe attach, not worth
+                // surfacing a failure here on top of whatever else
+                // happened above
+            }
+        }
+    }
+
     public void connect() throws Exception {
         VirtualMachine vm = VirtualMachine.attach(String.valueOf(pid));
         try {
             // Ask the target JVM for its local JMX connector address.
             // If the JVM has never had JMX enabled, this property is
-            // null on first call, startLocalManagementAgent() forces
+            // null on first call — startLocalManagementAgent() forces
             // the target JVM to start one on demand.
-            String connectorAddress = vm.getAgentProperties().getProperty("com.sun.management.jmxremote.localConnectorAddress");
+            String connectorAddress =
+                    vm.getAgentProperties().getProperty("com.sun.management.jmxremote.localConnectorAddress");
 
             if (connectorAddress == null) {
                 connectorAddress = vm.startLocalManagementAgent();
@@ -64,15 +108,18 @@ public class JmxConnector implements AutoCloseable {
         // HeapMemoryUsage is exposed as a CompositeData, not a simple
         // type, because it bundles four related longs together.
         CompositeData heapUsage = (CompositeData) mbeanConnection.getAttribute(memoryMBean, "HeapMemoryUsage");
+
         long used = (Long) heapUsage.get("used");
         long committed = (Long) heapUsage.get("committed");
         long max = (Long) heapUsage.get("max");
+
         GcStats gcStats = readGcStats();
+
         return new HeapStats(pid, used, committed, max, gcStats);
     }
 
     /**
-     * Reads cumulative GC stats. We use these to detect "GC pressure",
+     * Reads cumulative GC stats. We use these to detect "GC pressure" —
      * a JVM spending a high percentage of time in GC is a leading
      * indicator of an OOM about to happen (see GcPressureCalculator,
      * built later, for how this becomes a percentage).
@@ -107,7 +154,8 @@ public class JmxConnector implements AutoCloseable {
     }
 
     /**
-     * Lists every JVM process visible to the current user. This is how the daemon
+     * Lists every JVM process visible to the current user, using the
+     * same mechanism `jps` uses internally. This is how the daemon
      * will discover PIDs before connecting to each one individually.
      */
     public static List<VirtualMachineDescriptor> listAttachableJvms() {
@@ -124,28 +172,6 @@ public class JmxConnector implements AutoCloseable {
         }
     }
 
-    public record GcStats(long collectionCount, long collectionTimeMs) {}
-
-    public static void main(String[] args) throws Exception {
-        if (args.length == 0) {
-            System.out.println("Attachable JVMs on this machine:");
-            for (VirtualMachineDescriptor vmd : listAttachableJvms()) {
-                System.out.printf("  PID %-8s %s%n", vmd.id(), vmd.displayName());
-            }
-            System.out.println("\nRun again with a PID argument to read its heap stats.");
-            return;
-        }
-
-        long pid = Long.parseLong(args[0]);
-        try (JmxConnector jmx = new JmxConnector(pid)) {
-            jmx.connect();
-            HeapStats stats = jmx.readHeapStats();
-
-            System.out.printf("PID %d%n", stats.pid());
-            System.out.printf("  Heap used:      %,d bytes (%.1f%% of max)%n", stats.usedBytes(), stats.usedPercentOfMax());
-            System.out.printf("  Heap committed: %,d bytes%n", stats.committedBytes());
-            System.out.printf("  Heap max:       %,d bytes%n", stats.maxBytes());
-            System.out.printf("  GC collections: %d (%,d ms total)%n", stats.gc().collectionCount(), stats.gc().collectionTimeMs());
-        }
+    public record GcStats(long collectionCount, long collectionTimeMs) {
     }
 }
