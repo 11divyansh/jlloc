@@ -6,12 +6,16 @@ import java.util.List;
 import java.util.Properties;
 
 /**
- * Turns a raw DetectedJvm (just a PID + whatever command-line/display
- * name string the OS reports) into a Classification, using rules
- * loaded from FingerprintRegistry rather than hardcoded Java logic.
+ * Turns a raw DetectedJvm into a Classification, using rules loaded
+ * from FingerprintRegistry rather than hardcoded Java logic.
  *
- * This used to classify into a fixed ProcessType enum (SPRING_BOOT,
- * ELASTICSEARCH, ACTIVEMQ, ...).
+ * Priority is a plain int (priorityWeight from the registry), not an
+ * enum like LOW/NORMAL/MEDIUM/HIGH. The budget engine needs to do real
+ * arithmetic with this - e.g. "give each process a share proportional
+ * to its weight" - and a 4-value enum forces an awkward mapping step
+ * before any math can happen. A number is just usable directly:
+ * weight 80 naturally gets 4x the share of weight 20, no translation
+ * layer needed.
  */
 public class ProcessFingerprinter {
 
@@ -49,9 +53,19 @@ public class ProcessFingerprinter {
         // but possible with broad markers) - first match wins, using
         // JSON entry order as the tie-break.
         FingerprintRegistry.FingerprintRule rule = matches.get(0);
-        String appName = "ide".equals(rule.category()) || "build-tool".equals(rule.category())
-                ? rule.id()
-                : extractJarName(name);
+
+        String appName;
+        if ("ide".equals(rule.category()) || "build-tool".equals(rule.category())) {
+            appName = rule.id();
+        } else if ("search-engine".equals(rule.category())
+                || "message-broker".equals(rule.category())
+                || "database".equals(rule.category())) {
+            // For well-known infrastructure, use the fingerprint id as
+            // the clean name rather than a raw path or class name
+            appName = rule.id();
+        } else {
+            appName = extractJarName(name);
+        }
 
         return new Classification(jvm.pid(), rule.category(), appName, rule.priorityWeight());
     }
@@ -132,6 +146,13 @@ public class ProcessFingerprinter {
         if (first.contains("/") || first.contains("\\") || first.endsWith(".jar")) {
             return extractJarName(first);
         }
+
+        // Strip package prefix from fully-qualified class names:
+        // com.connectsphere.auth.AuthServiceApplication → AuthServiceApplication
+        // examples.BatchDocumentExtraction → BatchDocumentExtraction
+        if (first.contains(".")) {
+            return first.substring(first.lastIndexOf('.') + 1);
+        }
         return first;
     }
 
@@ -140,5 +161,13 @@ public class ProcessFingerprinter {
      * priorityWeight is a plain int the budget engine can use directly
      * in proportional-share arithmetic.
      */
-    public record Classification(long pid, String category, String appName, int priorityWeight) {}
+    public record Classification(long pid, String category, String appName, int priorityWeight) {
+    }
+
+    /**
+     * Manual verification of this class now lives in
+     * src/test/java/com/jlloc/daemon/ProcessFingerprinterTest.java
+     * rather than a main() method here - see DaemonMain for the real
+     * entry point.
+     */
 }
