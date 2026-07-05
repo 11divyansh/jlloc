@@ -1,6 +1,6 @@
 # jlloc
 
-Automatic JVM heap management for local development.
+Automatic JVM heap monitoring, diagnostic and management for local development.
 
 Run multiple Java services, Elasticsearch, ActiveMQ, and any other JVM
 process on one machine without manually tuning `-Xmx` for each one or
