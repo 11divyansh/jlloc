@@ -20,12 +20,6 @@ import java.time.Instant;
  *               Informs the medium-term action (increase -Xmx for
  *               load, take a heap dump for a leak, etc.)
  *
- * A doctor analogy: a patient in cardiac arrest caused by diabetes
- * gets a severity of CRITICAL and a diagnosis of LEAK (or LOAD).
- * The doctor says "cardiac arrest — treat immediately" not
- * "interesting diabetes case." Severity is what drives the action.
- * Diagnosis explains the root cause once the emergency is handled.
- *
  * Scores are named "signal strength" not "confidence" or "%":
  *   - they are NOT probabilities (they don't sum to 100)
  *   - they are NOT certainties
@@ -77,7 +71,24 @@ public record DiagnosisResult(
          * to distinguish load from leak. More data needed, or
          * manual inspection required.
          */
-        UNKNOWN
+        UNKNOWN,
+        /**
+         * The JVM itself looks fine but the host or container is under
+         * memory pressure. Total RSS (heap + Metaspace + direct buffers
+         * + native) is approaching or exceeding the container limit,
+         * or swap thrashing is occurring at the OS level.
+         *
+         * The right action is: reduce total JVM footprint (lower -Xmx
+         * to leave room for off-heap), or increase container memory.
+         * NOT: take a heap dump or tune GC — that's the wrong diagnosis
+         * entirely, and would waste time chasing a leak that isn't there.
+         *
+         * This is the failure mode that kills pods at 65-80% heap — not
+         * a JVM problem at all, but a host/container sizing problem that
+         * only becomes visible once jlloc can see both JVM and OS/cgroup
+         * signals together, not JVM-internal signals alone.
+         */
+        HOST_MEMORY_PRESSURE
     }
 
     /**

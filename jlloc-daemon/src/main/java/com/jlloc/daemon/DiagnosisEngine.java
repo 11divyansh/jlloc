@@ -38,6 +38,17 @@ public class DiagnosisEngine {
     private static final double WARNING_GC_RATIO        = 0.40;
     private static final double WARNING_HEAP_RATIO      = 0.80;
 
+    // Container pressure thresholds — same shape as heap thresholds,
+    // just measured against the cgroup limit instead of -Xmx
+    private static final double CRITICAL_CONTAINER_PRESSURE = 0.92;
+    private static final double WARNING_CONTAINER_PRESSURE  = 0.80;
+    // Diagnosis-level container pressure threshold. Deliberately equal
+    // to WARNING_CONTAINER_PRESSURE rather than the CRITICAL one:
+    // severity and diagnosis are different axes, and it's fine — good,
+    // even — for the diagnosis to name "this is a host pressure issue"
+    // a bit before severity escalates all the way to CRITICAL.
+    private static final double DIAGNOSIS_CONTAINER_PRESSURE = 0.80;
+
     // Diagnosis scoring thresholds
     private static final double LEAK_SLOPE_THRESHOLD    = 50_000;   // bytes/sec
     private static final double HIGH_ALLOC_RATE         = 5_000_000; // bytes/sec
@@ -89,11 +100,29 @@ public class DiagnosisEngine {
 
     private static DiagnosisResult.Severity determineSeverity(MemorySignal signal) {
         // CRITICAL: hard rule, no scoring
+        // Swap thrashing — the pod appears hung to health probes even
+        // though the JVM hasn't thrown OOM. Heap metrics look fine.
+        if (signal.isThrashingIndicated()) {
+            return DiagnosisResult.Severity.CRITICAL;
+        }
+
+        // Container memory pressure — RSS approaching cgroup limit.
+        // The pod will be OOM-killed by Kubernetes regardless of heap%.
+        if (signal.isContainerSignalAvailable()
+                && signal.containerMemoryPressure() >= CRITICAL_CONTAINER_PRESSURE) {
+            return DiagnosisResult.Severity.CRITICAL;
+        }
         if (signal.isGcRatioAvailable() && signal.gcTimeRatio() >= CRITICAL_GC_RATIO) {
             return DiagnosisResult.Severity.CRITICAL;
         }
         if (signal.heapUsedRatio() >= CRITICAL_HEAP_RATIO) {
             return DiagnosisResult.Severity.CRITICAL;
+        }
+
+        // WARNING thresholds
+        if (signal.isContainerSignalAvailable()
+                && signal.containerMemoryPressure() >= WARNING_CONTAINER_PRESSURE) {
+            return DiagnosisResult.Severity.WARNING;
         }
 
         // WARNING: elevated but not emergency
@@ -109,6 +138,18 @@ public class DiagnosisEngine {
 
     private static DiagnosisResult.Diagnosis determineDiagnosis(
             int leakSignal, int loadSignal, MemorySignal signal) {
+        // Host/container pressure overrides JVM-internal diagnosis
+        // entirely. The JVM's own heap signals are irrelevant to "why"
+        // when the actual problem is at the OS or cgroup layer — this
+        // is exactly the failure mode the thread described: heap looks
+        // healthy, pod dies anyway. Evaluated BEFORE leak/load scoring
+        // for the same reason CRITICAL overrides severity scoring:
+        // this fact, if true, is the whole answer.
+        if (signal.isThrashingIndicated()
+                || (signal.isContainerSignalAvailable()
+                && signal.containerMemoryPressure() >= DIAGNOSIS_CONTAINER_PRESSURE)) {
+            return DiagnosisResult.Diagnosis.HOST_MEMORY_PRESSURE;
+        }
         // When both signals are low, the process is simply idle/healthy.
         // UNKNOWN means "signals contradict each other", not "no signal".
         // Returning UNKNOWN for a 3.8% heap idle process is misleading.
@@ -200,6 +241,47 @@ public class DiagnosisEngine {
             MemorySignal signal,
             DiagnosisResult.SignalStrengths s
     ) {
+        // HOST_MEMORY_PRESSURE gets its own reason format — the evidence
+        // that justifies this diagnosis lives in Layer 2/3 signals, not
+        // the heap/GC/leak lines used for JVM-internal diagnoses. Showing
+        // the heap line anyway, but explicitly labeled, since "heap looks
+        // fine" is itself an important, easily-misread part of the story.
+        if (diagnosis == DiagnosisResult.Diagnosis.HOST_MEMORY_PRESSURE) {
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("Heap ........... %.1f%% (JVM-internal — not the problem)%n",
+                    signal.heapUsedRatio() * 100));
+
+            if (signal.isRssAvailable()) {
+                sb.append(String.format("RSS ............ %.0f MB%n",
+                        signal.rssBytes() / (1024.0 * 1024)));
+            } else {
+                sb.append("RSS ............ unavailable\n");
+            }
+
+            if (signal.isContainerSignalAvailable()) {
+                sb.append(String.format("Container ...... %.1f%% of limit%n",
+                        signal.containerMemoryPressure() * 100));
+            } else {
+                sb.append("Container ...... not running in a container / limit unreadable\n");
+            }
+
+            if (signal.isSwapRateAvailable()) {
+                sb.append(String.format("Swap in/out .... %.2f / %.2f MB/s%n",
+                        signal.swapInRateBytesPerSecond() / (1024.0 * 1024),
+                        signal.swapOutRateBytesPerSecond() / (1024.0 * 1024)));
+            } else {
+                sb.append("Swap in/out .... unavailable\n");
+            }
+
+            if (signal.isMajorFaultAvailable()) {
+                sb.append(String.format("Major faults ... %.1f/sec%n",
+                        signal.majorPageFaultsPerSecond()));
+            } else {
+                sb.append("Major faults ... unavailable\n");
+            }
+
+            return sb.toString().stripTrailing();
+        }
         String heapLine = String.format("Heap ........... %.1f%%", signal.heapUsedRatio() * 100);
 
         String gcLine = signal.isGcRatioAvailable()
@@ -232,6 +314,11 @@ public class DiagnosisEngine {
             case CRITICAL -> switch (diagnosis) {
                 case LEAK -> "Take a heap dump immediately, then restart with more heap.\n" +
                         "Command: jlloc dump <service>";
+                case HOST_MEMORY_PRESSURE ->
+                        "Total JVM footprint (heap + off-heap) is exceeding available host/container\n" +
+                                "memory. Restarting will not fix this — the JVM will hit the same ceiling again.\n" +
+                                "Reduce -Xmx to leave headroom for off-heap usage, reduce direct buffer usage,\n" +
+                                "or increase the container memory limit.";
                 default   -> "OOM is imminent. Restart this service now.\n" +
                         "Command: jlloc fix <service>";
             };
@@ -240,6 +327,10 @@ public class DiagnosisEngine {
                         "Command: jlloc dump <service>";
                 case LOAD    -> "High heap usage under load. Consider increasing -Xmx if this is sustained.\n" +
                         "Command: jlloc fix <service>";
+                case HOST_MEMORY_PRESSURE ->
+                        "Host or container memory is under pressure even though heap looks fine.\n" +
+                                "Watch RSS and swap rate — consider reducing -Xmx to leave more headroom\n" +
+                                "for off-heap usage before this escalates.";
                 case UNKNOWN -> "Mixed signals. Watch this service over the next few minutes.";
                 default      -> null;
             };
