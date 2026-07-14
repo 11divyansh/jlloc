@@ -68,6 +68,14 @@
       "priorityWeight": 20
     },
     {
+      "id": "spring-boot-ide-launched",
+      "category": "application",
+      "match": "regex",
+      "nameContains": ["[a-zA-Z0-9_.]+Application(\\s|$)"],
+      "systemPropertyMarkers": ["spring.application.name"],
+      "priorityWeight": 20
+    },
+    {
       "id": "quarkus",
       "category": "application",
       "match": "contains",

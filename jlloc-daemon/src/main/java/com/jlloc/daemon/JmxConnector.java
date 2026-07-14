@@ -7,6 +7,7 @@ import javax.management.remote.JMXConnector;
 import javax.management.remote.JMXConnectorFactory;
 import javax.management.remote.JMXServiceURL;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.util.List;
 
 import com.sun.tools.attach.VirtualMachine;
@@ -14,9 +15,25 @@ import com.sun.tools.attach.VirtualMachineDescriptor;
 
 /**
  * Connects to a target JVM (by PID) and reads its live heap + GC stats
- * via JMX. This is the foundational piece of jlloc - every other
+ * via JMX. This is the foundational piece of jlloc — every other
  * component (budget engine, CLI status, profile store) depends on
  * being able to ask "what is this JVM's heap doing right now?"
+ *
+ * How this works:
+ *
+ *   1. We use the Attach API to "attach" to a target JVM by PID.
+ *      This is the same mechanism VisualVM/JConsole use — it does
+ *      NOT require the target JVM to have been started with any
+ *      special flags. Any JVM can be attached to by default.
+ *
+ *   2. Attaching gives us a "local connector address", basically
+ *      a local socket/pipe the target JVM exposes once we ask it to.
+ *
+ *   3. We connect a standard JMXConnector to that address.
+ *
+ *   4. Once connected, we query the well-known MBean
+ *      "java.lang:type=Memory" which every JVM exposes by default.
+ *      It contains HeapMemoryUsage: used / committed / max.
  */
 public class JmxConnector implements AutoCloseable {
 
@@ -32,16 +49,6 @@ public class JmxConnector implements AutoCloseable {
      * Attaches to the target JVM and opens a JMX connection.
      * Must be called before any read* methods.
      */
-    /**
-     * Probes whether a PID is actually reachable, instead of assuming
-     * every JVM supports attach + JMX. Real reasons this can fail:
-     * the target was started with -XX:+DisableAttachMechanism, it's
-     * owned by another OS user / requires elevated permissions, or
-     * it's some embedded/custom runtime that doesn't expose the
-     * Attach API the way standard HotSpot does. We discover this
-     * once per PID and record it, rather than letting every caller
-     * independently try-catch its way around the same failure modes.
-     */
     public static JvmCapabilities probeCapabilities(long pid) {
         com.sun.tools.attach.VirtualMachine vm;
         try {
@@ -53,8 +60,7 @@ public class JmxConnector implements AutoCloseable {
         }
 
         try {
-            String connectorAddress = vm.getAgentProperties()
-                    .getProperty("com.sun.management.jmxremote.localConnectorAddress");
+            String connectorAddress = vm.getAgentProperties().getProperty("com.sun.management.jmxremote.localConnectorAddress");
             if (connectorAddress == null) {
                 connectorAddress = vm.startLocalManagementAgent();
             }
@@ -99,14 +105,9 @@ public class JmxConnector implements AutoCloseable {
 
     /**
      * Reads current heap usage from the target JVM.
-     * Maps directly to what `jcmd <pid> GC.heap_info` would show you,
-     * but structured and queryable from our own process.
      */
     public HeapStats readHeapStats() throws Exception {
         ObjectName memoryMBean = new ObjectName("java.lang:type=Memory");
-
-        // HeapMemoryUsage is exposed as a CompositeData, not a simple
-        // type, because it bundles four related longs together.
         CompositeData heapUsage = (CompositeData) mbeanConnection.getAttribute(memoryMBean, "HeapMemoryUsage");
 
         long used = (Long) heapUsage.get("used");
@@ -114,12 +115,84 @@ public class JmxConnector implements AutoCloseable {
         long max = (Long) heapUsage.get("max");
 
         GcStats gcStats = readGcStats();
-
         return new HeapStats(pid, used, committed, max, gcStats);
     }
 
     /**
-     * Reads cumulative GC stats. We use these to detect "GC pressure" —
+     * Reads off-heap JVM memory pools: Metaspace, Code Cache, and
+     * Direct Buffers. These are the signals that explain why a pod
+     * gets killed even when heap looks healthy, off-heap allocations
+     * (especially from Netty/NIO direct buffers in Spring WebFlux,
+     * Elasticsearch, Kafka) contribute to total RSS and can push the
+     * process over a container memory limit while heap metrics show
+     * everything is fine.
+     *
+     * All three are standard JMX, no special flags or attach needed.
+     */
+    public OffHeapStats readOffHeapStats() throws Exception {
+        long metaspaceUsed = 0, metaspaceCommitted = 0;
+        long codeCacheUsed = 0;
+
+        // Memory pools: Metaspace and Code Cache live here
+        List<ObjectName> memPools = List.copyOf(mbeanConnection.queryNames(new ObjectName("java.lang:type=MemoryPool,*"), null));
+
+        for (ObjectName pool : memPools) {
+            String name = (String) mbeanConnection.getAttribute(pool, "Name");
+            CompositeData usage = (CompositeData) mbeanConnection.getAttribute(pool, "Usage");
+            if (usage == null) continue;
+
+            long poolUsed = (Long) usage.get("used");
+            long poolCommitted = (Long) usage.get("committed");
+
+            if (name.contains("Metaspace")) {
+                metaspaceUsed = poolUsed;
+                metaspaceCommitted = poolCommitted;
+            } else if (name.contains("Code")) {
+                codeCacheUsed = poolUsed;
+            }
+        }
+
+        // Direct buffer pools: ByteBuffer.allocateDirect(), used heavily
+        // by Netty (Spring WebFlux, Elasticsearch transport, Kafka)
+        long directUsed = 0, directCapacity = 0;
+        List<ObjectName> bufferPools = List.copyOf(mbeanConnection.queryNames(new ObjectName("java.nio:type=BufferPool,*"), null));
+
+        for (ObjectName pool : bufferPools) {
+            String name = (String) mbeanConnection.getAttribute(pool, "Name");
+            if ("direct".equals(name)) {
+                directUsed = (Long) mbeanConnection.getAttribute(pool, "MemoryUsed");
+                directCapacity = (Long) mbeanConnection.getAttribute(pool, "TotalCapacity");
+            }
+        }
+
+        return new OffHeapStats(
+                metaspaceUsed, metaspaceCommitted,
+                directUsed, directCapacity,
+                codeCacheUsed
+        );
+    }
+
+    public record OffHeapStats(
+            long metaspaceUsedBytes,
+            long metaspaceCommittedBytes,
+            long directBufferUsedBytes,
+            long directBufferCapacityBytes,
+            long codeCacheUsedBytes
+    ) {
+        /**
+         * Estimated total JVM footprint = heap + Metaspace + Code Cache
+         * + direct buffers. This is what contributes to container RSS,
+         * not just the heap. When this approaches the container limit,
+         * the pod will be killed regardless of heap health.
+         */
+        public long estimatedTotalFootprintBytes(long heapUsedBytes) {
+            return heapUsedBytes + metaspaceUsedBytes
+                    + codeCacheUsedBytes + directBufferUsedBytes;
+        }
+    }
+
+    /**
+     * Reads cumulative GC stats. We use these to detect "GC pressure"
      * a JVM spending a high percentage of time in GC is a leading
      * indicator of an OOM about to happen (see GcPressureCalculator,
      * built later, for how this becomes a percentage).
@@ -128,9 +201,7 @@ public class JmxConnector implements AutoCloseable {
         // Every GC algorithm (G1, ZGC, Parallel...) registers its own
         // MBean(s) under this domain. We sum across all of them so
         // this works regardless of which collector the target JVM uses.
-        List<ObjectName> gcMBeans = List.copyOf(
-                mbeanConnection.queryNames(new ObjectName("java.lang:type=GarbageCollector,*"), null)
-        );
+        List<ObjectName> gcMBeans = List.copyOf(mbeanConnection.queryNames(new ObjectName("java.lang:type=GarbageCollector,*"), null));
 
         long totalCollectionCount = 0;
         long totalCollectionTimeMs = 0;

@@ -1,24 +1,63 @@
 package com.jlloc.common.protocol;
 
-import com.jlloc.common.protocol.ProcessSummary;
-import com.jlloc.common.protocol.Response;
+import java.util.List;
 
 /**
- * Response to ExplainCommand. Contains the full diagnosis picture
- * for one service. The CLI renders this as a detailed block.
+ * Response to ExplainCommand. Contains everything the CLI needs to
+ * render a full `jlloc explain <service>` block.
  */
 public record ExplainResponse(
         ProcessSummary process,
-        // floor slope in bytes/sec — CLI formats as KB/s or MB/s
+
+        // JVM signals
+        double gcTimeRatio,
         double floorSlopeBytesPerSec,
         double allocationRateBytesPerSec,
-        double gcTimeRatio,
-        // how many samples the diagnosis is based on
+
+        // Off-heap signals (Layer 1 JMX)
+        long metaspaceUsedBytes,
+        long directBufferUsedBytes,
+        long codeCacheUsedBytes,
+
+        // OS signals (Layer 2 /proc)
+        long rssBytes,
+        double swapInRateBytesPerSec,
+        double swapOutRateBytesPerSec,
+        double majorFaultsPerSec,
+
+        // Container signals (Layer 3 cgroup)
+        long containerLimitBytes,
+        double containerPressure,
+
+        // Recommendation
+        String recommendationId,
+        String shortAdvice,
+        String fullAdvice,
+        String command,
+
+        // Data quality
         int sampleCount,
-        int minSamplesRequired
+        int minSamplesRequired,
+
+        // Signal lines pre-formatted by DiagnosisFormatter
+        // (list of non-null lines to display in order)
+        List<String> signalLines
+
 ) implements Response {
 
     public boolean hasSufficientData() {
         return sampleCount >= minSamplesRequired;
+    }
+
+    public boolean hasContainerSignal() {
+        return containerLimitBytes > 0;
+    }
+
+    public boolean hasOffHeapSignals() {
+        return metaspaceUsedBytes >= 0 || directBufferUsedBytes >= 0;
+    }
+
+    public boolean isThrashing() {
+        return swapInRateBytesPerSec > 1_000_000 || swapOutRateBytesPerSec > 1_000_000;
     }
 }

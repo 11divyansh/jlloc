@@ -32,20 +32,20 @@ public class DiagnosisEngine {
 
     private static final int MIN_SAMPLES = 6;
 
-    // Hard thresholds for severity — not scores, hard rules
+    // Hard thresholds for severity not scores, hard rules
     private static final double CRITICAL_GC_RATIO      = 0.80;
     private static final double CRITICAL_HEAP_RATIO     = 0.97;
     private static final double WARNING_GC_RATIO        = 0.40;
     private static final double WARNING_HEAP_RATIO      = 0.80;
 
-    // Container pressure thresholds — same shape as heap thresholds,
+    // Container pressure thresholds same shape as heap thresholds,
     // just measured against the cgroup limit instead of -Xmx
     private static final double CRITICAL_CONTAINER_PRESSURE = 0.92;
     private static final double WARNING_CONTAINER_PRESSURE  = 0.80;
     // Diagnosis-level container pressure threshold. Deliberately equal
     // to WARNING_CONTAINER_PRESSURE rather than the CRITICAL one:
-    // severity and diagnosis are different axes, and it's fine — good,
-    // even — for the diagnosis to name "this is a host pressure issue"
+    // severity and diagnosis are different axes, and it's fine, good,
+    // even, for the diagnosis to name "this is a host pressure issue"
     // a bit before severity escalates all the way to CRITICAL.
     private static final double DIAGNOSIS_CONTAINER_PRESSURE = 0.80;
 
@@ -57,6 +57,9 @@ public class DiagnosisEngine {
     private static final double LEAK_HEAP_RATIO         = 0.60;
     private static final double LOAD_HEAP_RATIO         = 0.75;
 
+    // Threshold above which LOAD is treated as "add instances", not "add heap"
+    private static final double SCALE_OUT_HEAP_RATIO    = 0.85;
+
     // If leak and load signals are within this many points, call it UNKNOWN
     private static final int AMBIGUITY_BAND             = 15;
 
@@ -66,20 +69,20 @@ public class DiagnosisEngine {
                     DiagnosisResult.Severity.NORMAL,
                     DiagnosisResult.Diagnosis.UNKNOWN,
                     "collecting data — " + signal.sampleCount() + "/" + MIN_SAMPLES + " samples",
-                    null,
+                    null, // no recommendation yet, genuinely nothing to recommend, not even "collect more"
                     new DiagnosisResult.SignalStrengths(0, 0, 0, 0),
                     Instant.now()
             );
         }
 
-        // --- Step 1: severity first, as a hard rule ---
+        // severity first, as a hard rule
         // CRITICAL is not a score competing with others.
         // It is an emergency override. If the JVM is in GC thrash
         // or heap is effectively full, that fact is the verdict
         // regardless of what the diagnosis signals say.
         DiagnosisResult.Severity severity = determineSeverity(signal);
 
-        // --- Step 2: diagnosis signals ---
+        // diagnosis signals
         int leakSignal = scoreLeakSignal(signal);
         int loadSignal = scoreLoadSignal(signal);
         int gcPressureSignal = scoreGcPressureSignal(signal);
@@ -89,27 +92,24 @@ public class DiagnosisEngine {
                 leakSignal, loadSignal, gcPressureSignal, heapUsageSignal
         );
 
-        DiagnosisResult.Diagnosis diagnosis = determineDiagnosis(
-                leakSignal, loadSignal, signal);
+        DiagnosisResult.Diagnosis diagnosis = determineDiagnosis(leakSignal, loadSignal, signal);
+        RecommendationId recommendationId = determineRecommendationId(severity, diagnosis, signal);
+        String reason = buildReason(diagnosis, signal, strengths);
 
-        String reason = buildReason(severity, diagnosis, signal, strengths);
-        String recommendation = buildRecommendation(severity, diagnosis);
-
-        return new DiagnosisResult(severity, diagnosis, reason, recommendation, strengths, Instant.now());
+        return new DiagnosisResult(severity, diagnosis, reason, recommendationId, strengths, Instant.now());
     }
 
     private static DiagnosisResult.Severity determineSeverity(MemorySignal signal) {
         // CRITICAL: hard rule, no scoring
-        // Swap thrashing — the pod appears hung to health probes even
+        // Swap thrashing the pod appears hung to health probes even
         // though the JVM hasn't thrown OOM. Heap metrics look fine.
         if (signal.isThrashingIndicated()) {
             return DiagnosisResult.Severity.CRITICAL;
         }
 
-        // Container memory pressure — RSS approaching cgroup limit.
+        // Container memory pressure RSS approaching cgroup limit.
         // The pod will be OOM-killed by Kubernetes regardless of heap%.
-        if (signal.isContainerSignalAvailable()
-                && signal.containerMemoryPressure() >= CRITICAL_CONTAINER_PRESSURE) {
+        if (signal.isContainerSignalAvailable() && signal.containerMemoryPressure() >= CRITICAL_CONTAINER_PRESSURE) {
             return DiagnosisResult.Severity.CRITICAL;
         }
         if (signal.isGcRatioAvailable() && signal.gcTimeRatio() >= CRITICAL_GC_RATIO) {
@@ -120,8 +120,7 @@ public class DiagnosisEngine {
         }
 
         // WARNING thresholds
-        if (signal.isContainerSignalAvailable()
-                && signal.containerMemoryPressure() >= WARNING_CONTAINER_PRESSURE) {
+        if (signal.isContainerSignalAvailable() && signal.containerMemoryPressure() >= WARNING_CONTAINER_PRESSURE) {
             return DiagnosisResult.Severity.WARNING;
         }
 
@@ -136,18 +135,11 @@ public class DiagnosisEngine {
         return DiagnosisResult.Severity.NORMAL;
     }
 
-    private static DiagnosisResult.Diagnosis determineDiagnosis(
-            int leakSignal, int loadSignal, MemorySignal signal) {
+    private static DiagnosisResult.Diagnosis determineDiagnosis(int leakSignal, int loadSignal, MemorySignal signal) {
         // Host/container pressure overrides JVM-internal diagnosis
         // entirely. The JVM's own heap signals are irrelevant to "why"
-        // when the actual problem is at the OS or cgroup layer — this
-        // is exactly the failure mode the thread described: heap looks
-        // healthy, pod dies anyway. Evaluated BEFORE leak/load scoring
-        // for the same reason CRITICAL overrides severity scoring:
-        // this fact, if true, is the whole answer.
-        if (signal.isThrashingIndicated()
-                || (signal.isContainerSignalAvailable()
-                && signal.containerMemoryPressure() >= DIAGNOSIS_CONTAINER_PRESSURE)) {
+        // when the actual problem is at the OS or cgroup layer
+        if (signal.isThrashingIndicated() || (signal.isContainerSignalAvailable() && signal.containerMemoryPressure() >= DIAGNOSIS_CONTAINER_PRESSURE)) {
             return DiagnosisResult.Diagnosis.HOST_MEMORY_PRESSURE;
         }
         // When both signals are low, the process is simply idle/healthy.
@@ -169,6 +161,52 @@ public class DiagnosisEngine {
             return DiagnosisResult.Diagnosis.LOAD;
         }
         return DiagnosisResult.Diagnosis.HEALTHY;
+    }
+
+    /**
+     * The single place that decides WHICH recommendation applies.
+     * RecommendationEngine trusts this ID rather than re-deriving it
+     */
+    private static RecommendationId determineRecommendationId(
+            DiagnosisResult.Severity severity,
+            DiagnosisResult.Diagnosis diagnosis,
+            MemorySignal signal) {
+
+        if (severity == DiagnosisResult.Severity.CRITICAL) {
+            if (signal.isThrashingIndicated()) {
+                return RecommendationId.EMERGENCY_REDUCE_FOOTPRINT;
+            }
+            if (signal.isContainerSignalAvailable()
+                    && signal.containerMemoryPressure() >= CRITICAL_CONTAINER_PRESSURE) {
+                return RecommendationId.INCREASE_CONTAINER_MEMORY;
+            }
+            return diagnosis == DiagnosisResult.Diagnosis.LEAK
+                    ? RecommendationId.TAKE_HEAP_DUMP
+                    : RecommendationId.INCREASE_XMX;
+        }
+
+        return switch (diagnosis) {
+            case HEALTHY -> RecommendationId.NOTHING_REQUIRED;
+            case LEAK    -> RecommendationId.TAKE_HEAP_DUMP;
+            case LOAD    -> {
+                boolean highAlloc = signal.isAllocationRateAvailable()
+                        && signal.allocationRateBytesPerSecond() > HIGH_ALLOC_RATE;
+                yield (signal.heapUsedRatio() > SCALE_OUT_HEAP_RATIO && highAlloc)
+                        ? RecommendationId.SCALE_HORIZONTALLY
+                        : RecommendationId.INCREASE_XMX;
+            }
+            case HOST_MEMORY_PRESSURE -> {
+                if (signal.isContainerSignalAvailable()) {
+                    boolean heapIsTooBig = signal.heapUsedRatio() < 0.60
+                            && signal.containerMemoryPressure() > DIAGNOSIS_CONTAINER_PRESSURE;
+                    yield heapIsTooBig
+                            ? RecommendationId.DECREASE_XMX
+                            : RecommendationId.INCREASE_CONTAINER_MEMORY;
+                }
+                yield RecommendationId.REDUCE_POD_DENSITY;
+            }
+            case UNKNOWN -> RecommendationId.COLLECT_MORE_SIGNALS;
+        };
     }
 
     /**
@@ -236,12 +274,11 @@ public class DiagnosisEngine {
     }
 
     private static String buildReason(
-            DiagnosisResult.Severity severity,
             DiagnosisResult.Diagnosis diagnosis,
             MemorySignal signal,
             DiagnosisResult.SignalStrengths s
     ) {
-        // HOST_MEMORY_PRESSURE gets its own reason format — the evidence
+        // HOST_MEMORY_PRESSURE gets its own reason format the evidence
         // that justifies this diagnosis lives in Layer 2/3 signals, not
         // the heap/GC/leak lines used for JVM-internal diagnoses. Showing
         // the heap line anyway, but explicitly labeled, since "heap looks
@@ -251,35 +288,20 @@ public class DiagnosisEngine {
             sb.append(String.format("Heap ........... %.1f%% (JVM-internal — not the problem)%n",
                     signal.heapUsedRatio() * 100));
 
-            if (signal.isRssAvailable()) {
-                sb.append(String.format("RSS ............ %.0f MB%n",
-                        signal.rssBytes() / (1024.0 * 1024)));
-            } else {
-                sb.append("RSS ............ unavailable\n");
-            }
-
-            if (signal.isContainerSignalAvailable()) {
-                sb.append(String.format("Container ...... %.1f%% of limit%n",
-                        signal.containerMemoryPressure() * 100));
-            } else {
-                sb.append("Container ...... not running in a container / limit unreadable\n");
-            }
-
-            if (signal.isSwapRateAvailable()) {
-                sb.append(String.format("Swap in/out .... %.2f / %.2f MB/s%n",
-                        signal.swapInRateBytesPerSecond() / (1024.0 * 1024),
-                        signal.swapOutRateBytesPerSecond() / (1024.0 * 1024)));
-            } else {
-                sb.append("Swap in/out .... unavailable\n");
-            }
-
-            if (signal.isMajorFaultAvailable()) {
-                sb.append(String.format("Major faults ... %.1f/sec%n",
-                        signal.majorPageFaultsPerSecond()));
-            } else {
-                sb.append("Major faults ... unavailable\n");
-            }
-
+            sb.append(signal.isRssAvailable()
+                    ? String.format("RSS ............ %.0f MB%n", signal.rssBytes() / (1024.0 * 1024))
+                    : "RSS ............ unavailable\n");
+            sb.append(signal.isContainerSignalAvailable()
+                    ? String.format("Container ...... %.1f%% of limit%n", signal.containerMemoryPressure() * 100)
+                    : "Container ...... not running in a container / limit unreadable\n");
+            sb.append(signal.isSwapRateAvailable()
+                    ? String.format("Swap in/out .... %.2f / %.2f MB/s%n",
+                    signal.swapInRateBytesPerSecond() / (1024.0 * 1024),
+                    signal.swapOutRateBytesPerSecond() / (1024.0 * 1024))
+                    : "Swap in/out .... unavailable\n");
+            sb.append(signal.isMajorFaultAvailable()
+                    ? String.format("Major faults ... %.1f/sec%n", signal.majorPageFaultsPerSecond())
+                    : "Major faults ... unavailable\n");
             return sb.toString().stripTrailing();
         }
         String heapLine = String.format("Heap ........... %.1f%%", signal.heapUsedRatio() * 100);
@@ -304,38 +326,6 @@ public class DiagnosisEngine {
                 : "Floor slope .... unavailable";
 
         return String.join("\n", heapLine, gcLine, allocLine, leakLine, slopeLine);
-    }
-
-    private static String buildRecommendation(
-            DiagnosisResult.Severity severity,
-            DiagnosisResult.Diagnosis diagnosis
-    ) {
-        return switch (severity) {
-            case CRITICAL -> switch (diagnosis) {
-                case LEAK -> "Take a heap dump immediately, then restart with more heap.\n" +
-                        "Command: jlloc dump <service>";
-                case HOST_MEMORY_PRESSURE ->
-                        "Total JVM footprint (heap + off-heap) is exceeding available host/container\n" +
-                                "memory. Restarting will not fix this — the JVM will hit the same ceiling again.\n" +
-                                "Reduce -Xmx to leave headroom for off-heap usage, reduce direct buffer usage,\n" +
-                                "or increase the container memory limit.";
-                default   -> "OOM is imminent. Restart this service now.\n" +
-                        "Command: jlloc fix <service>";
-            };
-            case WARNING -> switch (diagnosis) {
-                case LEAK    -> "Post-GC floor is rising. Take a heap dump soon to identify retained objects.\n" +
-                        "Command: jlloc dump <service>";
-                case LOAD    -> "High heap usage under load. Consider increasing -Xmx if this is sustained.\n" +
-                        "Command: jlloc fix <service>";
-                case HOST_MEMORY_PRESSURE ->
-                        "Host or container memory is under pressure even though heap looks fine.\n" +
-                                "Watch RSS and swap rate — consider reducing -Xmx to leave more headroom\n" +
-                                "for off-heap usage before this escalates.";
-                case UNKNOWN -> "Mixed signals. Watch this service over the next few minutes.";
-                default      -> null;
-            };
-            case NORMAL -> null;
-        };
     }
 
     private static String allocationLabel(double bytesPerSecond) {

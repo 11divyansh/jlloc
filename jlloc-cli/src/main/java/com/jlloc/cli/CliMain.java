@@ -9,15 +9,14 @@ import java.io.*;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
- * The CLI entry point. Reads a command from args, sends it to the
- * daemon over the socket, and formats the response for the terminal.
+ * CLI entry point. Sends commands to the daemon over the socket and
+ * formats responses for the terminal.
  *
- * Formatting lives here, not in the daemon. The daemon returns data.
- * The CLI decides how to present it. This separation means a future
- * web UI, VSCode extension, or REST API can reuse the same daemon
- * responses without any daemon changes.
+ * All formatting lives here, not in the daemon. The daemon returns
+ * structured data. The CLI decides how to present it.
  */
 public class CliMain {
 
@@ -99,6 +98,8 @@ public class CliMain {
         };
     }
 
+    // status
+
     private static int formatStatus(StatusResponse r) {
         int maxNameLen = r.processes().stream()
                 .mapToInt(p -> p.appName().length())
@@ -106,7 +107,7 @@ public class CliMain {
         maxNameLen = Math.max(maxNameLen, 20);
 
         System.out.println();
-        System.out.printf("jlloc - %d JVMs monitored%n", r.processes().size());
+        System.out.printf("jlloc — %d JVMs monitored%n", r.processes().size());
         if (r.totalRamBytes() > 0) {
             System.out.printf("System RAM: %s used / %s total%n",
                     humanBytes(r.totalRamBytes() - r.availableRamBytes()),
@@ -114,11 +115,11 @@ public class CliMain {
         }
         System.out.println();
 
-        String hdr = "  %-8s  %-" + maxNameLen + "s  %-8s  %-18s  %s%n";
+        String hdr = "  %-8s  %-" + maxNameLen + "s  %-8s  %-20s  %s%n";
         System.out.printf(hdr, "PID", "APP", "HEAP", "STATUS", "");
         System.out.printf(hdr,
                 "--------", "-".repeat(maxNameLen),
-                "--------", "------------------", "");
+                "--------", "--------------------", "");
 
         for (ProcessSummary p : r.processes()) {
             String heapStr = p.stillCollecting() ? "?"
@@ -134,36 +135,117 @@ public class CliMain {
         return 0;
     }
 
+    // explain
+
     private static int formatExplain(ExplainResponse r) {
         ProcessSummary p = r.process();
         System.out.println();
         System.out.printf("  %s  (PID %d)%n", p.appName(), p.pid());
-        System.out.println("  " + "─".repeat(50));
+        System.out.println("  " + "─".repeat(52));
         System.out.printf("  Severity:    %s%n", p.severity());
         System.out.printf("  Diagnosis:   %s%n", p.diagnosis());
         System.out.println();
 
-        if (p.reason() != null) {
-            for (String line : p.reason().split("\n")) {
+        if (!r.hasSufficientData()) {
+            System.out.printf("  Still collecting data — %d/%d samples minimum%n",
+                    r.sampleCount(), r.minSamplesRequired());
+            System.out.println();
+            return 0;
+        }
+
+        // Signal lines use pre-formatted list from DiagnosisFormatter
+        // if available, otherwise fall back to raw numbers
+        List<String> lines = r.signalLines();
+        if (lines != null && !lines.isEmpty()) {
+            for (String line : lines) {
                 System.out.println("  " + line);
             }
-        }
+        } else {
+            // Fallback rendering from raw signal fields
+            System.out.printf("  Heap ........... %.1f%%  (%s / %s)%n",
+                    p.heapUsedPercent(),
+                    humanBytes(p.heapUsedBytes()),
+                    humanBytes(p.heapMaxBytes()));
 
-        if (p.recommendation() != null) {
-            System.out.println();
-            System.out.println("  Recommendation:");
-            for (String line : p.recommendation().split("\n")) {
-                System.out.println("    " + line);
+            if (r.gcTimeRatio() >= 0) {
+                System.out.printf("  GC Pressure .... %.1f%% of CPU%n",
+                        r.gcTimeRatio() * 100);
+            }
+
+            if (r.hasOffHeapSignals()) {
+                System.out.println();
+                if (r.metaspaceUsedBytes() >= 0) {
+                    System.out.printf("  Metaspace ...... %s%n",
+                            humanBytes(r.metaspaceUsedBytes()));
+                }
+                if (r.directBufferUsedBytes() >= 0) {
+                    String note = r.directBufferUsedBytes() > 200_000_000
+                            ? "  ↑ growing (Netty?)" : "";
+                    System.out.printf("  Direct buffers . %s%s%n",
+                            humanBytes(r.directBufferUsedBytes()), note);
+                }
+            }
+
+            if (r.rssBytes() >= 0) {
+                System.out.println();
+                if (r.hasContainerSignal()) {
+                    String pressureNote = r.containerPressure() > 0.85
+                            ? "  ← this is why" : "";
+                    System.out.printf("  RSS ............ %s / %s container limit%s%n",
+                            humanBytes(r.rssBytes()),
+                            humanBytes(r.containerLimitBytes()),
+                            pressureNote);
+                } else {
+                    System.out.printf("  RSS ............ %s%n", humanBytes(r.rssBytes()));
+                }
+            }
+
+            if (r.isThrashing()) {
+                System.out.printf("  Swap ........... in=%.1f MB/s  out=%.1f MB/s  ← thrashing%n",
+                        r.swapInRateBytesPerSec() / (1024.0 * 1024.0),
+                        r.swapOutRateBytesPerSec() / (1024.0 * 1024.0));
+            }
+
+            if (r.floorSlopeBytesPerSec() != 0) {
+                System.out.printf("  Floor slope .... %+.1f KB/s%n",
+                        r.floorSlopeBytesPerSec() / 1024.0);
+            }
+
+            if (r.allocationRateBytesPerSec() >= 0) {
+                System.out.printf("  Allocation ..... %.2f MB/s%n",
+                        r.allocationRateBytesPerSec() / (1024.0 * 1024.0));
             }
         }
-        System.out.println();
 
+        // Recommendation block
+        if (r.shortAdvice() != null) {
+            System.out.println();
+            System.out.println("  " + "─".repeat(52));
+            System.out.println("  → " + r.shortAdvice());
+
+            if (r.fullAdvice() != null && !r.fullAdvice().equals(r.shortAdvice())) {
+                System.out.println();
+                for (String line : r.fullAdvice().split("\n")) {
+                    System.out.println("    " + line);
+                }
+            }
+
+            if (r.command() != null) {
+                System.out.println();
+                System.out.println("  Command:");
+                System.out.println("    " + r.command());
+            }
+        }
+
+        System.out.println();
         return switch (p.severity()) {
             case "CRITICAL" -> 2;
             case "WARNING"  -> 1;
             default         -> 0;
         };
     }
+
+    // dump / fix
 
     private static int formatDump(DumpResponse r) {
         System.out.printf("Heap dump written: %s (%s)%n",
@@ -189,19 +271,21 @@ public class CliMain {
         return switch (p.severity()) {
             case "CRITICAL" -> "⚠  act now";
             case "WARNING"  -> switch (p.diagnosis()) {
-                case "LEAK" -> "↑  jlloc dump " + p.appName();
-                case "LOAD" -> "↑  jlloc fix " + p.appName();
-                default     -> "↑  elevated";
+                case "LEAK"                -> "↑  jlloc dump " + p.appName();
+                case "LOAD"                -> "↑  jlloc fix " + p.appName();
+                case "HOST_MEMORY_PRESSURE"-> "↑  jlloc explain " + p.appName();
+                default                    -> "↑  elevated";
             };
             default -> "";
         };
     }
 
     private static String humanBytes(long bytes) {
-        if (bytes >= 1_073_741_824L) return String.format("%.1f GB", bytes / 1_073_741_824.0);
-        if (bytes >= 1_048_576L)     return String.format("%.1f MB", bytes / 1_048_576.0);
-        if (bytes >= 1_024L)         return String.format("%.1f KB", bytes / 1_024.0);
-        return bytes + " B";
+        if (bytes <= 0)                  return "?";
+        if (bytes >= 1_073_741_824L) return String.format("%.1fGB", bytes / 1_073_741_824.0);
+        if (bytes >= 1_048_576L)     return String.format("%.1fMB", bytes / 1_048_576.0);
+        if (bytes >= 1_024L)         return String.format("%.1fKB", bytes / 1_024.0);
+        return bytes + "B";
     }
 
     private static void printUsage() {
@@ -211,7 +295,13 @@ public class CliMain {
         System.out.println("  status                  Show all monitored JVMs");
         System.out.println("  explain <service>       Full diagnosis for one service");
         System.out.println("  dump <service>          Trigger a heap dump");
-        System.out.println("  fix <service>           Resize heap (Phase 4 — not yet)");
+        System.out.println("  fix <service>           Resize heap (Phase 6 — CRaC)");
+        System.out.println();
+        System.out.println("Examples:");
+        System.out.println("  jlloc status");
+        System.out.println("  jlloc explain auth-service");
+        System.out.println("  jlloc explain 27768");
+        System.out.println("  jlloc dump elasticsearch");
     }
 
     private static Command fail(String message) {

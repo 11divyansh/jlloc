@@ -1,22 +1,17 @@
-apply plugin: 'application'
+plugins {
+    id 'application'
+}
+
 dependencies {
     implementation project(':jlloc-common')
-
-    // Cross-platform system memory / CPU reading (Linux, Mac, Windows)
-    // Avoids us hand-parsing /proc/meminfo, shelling out to vm_stat, etc.
     implementation 'com.github.oshi:oshi-core:6.6.5'
-
-    // Parses fingerprints.json - the open, data-driven process
-    // classification registry. New frameworks get added by editing
-    // that JSON file, not by editing Java code or this enum-like list.
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
 }
 
 application {
     mainClass = 'com.jlloc.daemon.DaemonMain'
 
-    // JmxConnector uses com.sun.tools.attach.VirtualMachine, which lives
-    // in the jdk.attach module. It's present in every JDK but not on the
-    // classpath by default for modular runs, so we add it explicitly here.
-    applicationDefaultJvmArgs = ['--add-modules', 'jdk.attach']
+    applicationDefaultJvmArgs = [
+            '--add-modules', 'jdk.attach'
+    ]
 }

@@ -66,14 +66,18 @@ public class HeapMonitor {
 
     public void forgetPid(long pid) {
         timelines.remove(pid);
+        signalExtractor.forgetPid(pid);
     }
 
     /**
-     * One full poll cycle across all known JVMs.
-     * package-private so tests can invoke it directly without the
-     * scheduler — same reason as JvmProcessWatcher.pollOnce().
+     * One full poll cycle across all known JVMs
      */
     void pollAll() {
+        // Refresh system-wide OS signals (swap rate, I/O wait) exactly
+        // once for this cycle must happen before any pollOne() call,
+        // since those consume the cached result rather than re-reading
+        // /proc/vmstat per PID (see OsMemorySignalExtractor javadoc).
+        signalExtractor.beginCycle();
         for (ProcessRepository.ProcessRecord record : repository.all()) {
             try {
                 pollOne(record);
@@ -96,30 +100,30 @@ public class HeapMonitor {
             return;
         }
 
-        JmxConnector.HeapStats stats;
         try (JmxConnector jmx = new JmxConnector(record.pid())) {
             jmx.connect();
-            stats = jmx.readHeapStats();
-        }
+            JmxConnector.HeapStats stats = jmx.readHeapStats();
 
-        HeapSample sample = HeapSample.from(stats, Instant.now());
+            HeapSample sample = HeapSample.from(stats, Instant.now());
 
-        HeapTimeline timeline = timelines.computeIfAbsent(record.pid(), pid -> new HeapTimeline());
-        timeline.add(sample);
+            HeapTimeline timeline = timelines.computeIfAbsent(record.pid(), pid -> new HeapTimeline());
+            timeline.add(sample);
 
-        repository.updateHeapStats(record.pid(), stats);
+            repository.updateHeapStats(record.pid(), stats);
 
-        MemorySignal signal = signalExtractor.extract(timeline);
-        DiagnosisResult diagnosis = diagnosisEngine.diagnose(signal);
+            MemorySignal signal = signalExtractor.extract(timeline, jmx, record.pid());
+            DiagnosisResult diagnosis = diagnosisEngine.diagnose(signal);
 
-        DiagnosisResult previous = record.diagnosis();
-        repository.updateDiagnosis(record.pid(), diagnosis);
+            DiagnosisResult previous = record.diagnosis();
+            repository.updateDiagnosis(record.pid(), diagnosis);
+            repository.updateLastSignal(record.pid(), signal);
 
-        // Fire alert only on severity worsening — not on every poll,
-        // and not for diagnosis-only changes while severity stays NORMAL
-        if (isWorseSeverity(diagnosis.severity(),
+            // Fire alert only on severity worsening, not on every poll,
+            // and not for diagnosis-only changes while severity stays NORMAL
+            if (isWorseSeverity(diagnosis.severity(),
                 previous == null ? null : previous.severity())) {
-            onAlert.accept(new AlertEvent(record, diagnosis));
+                onAlert.accept(new AlertEvent(record, diagnosis));
+            }
         }
     }
 

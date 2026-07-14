@@ -30,7 +30,7 @@ public record ProcessSummary(
         // plain-language reason and recommendation
         // null if not yet available or not applicable
         String reason,
-        String recommendation,
+        String recommendationId,
 
         boolean stillCollecting
 ) implements Serializable {
