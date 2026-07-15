@@ -281,7 +281,8 @@ public class DaemonSocketServer {
         long max = r.heapStats() != null ? r.heapStats().maxBytes() : 0;
 
         boolean collecting = r.diagnosis() == null
-                || r.diagnosis().reason().startsWith("collecting");
+                || (r.diagnosis().reason() != null
+                && r.diagnosis().reason().startsWith("collecting"));
 
         String severity = r.diagnosis() != null
                 ? r.diagnosis().severity().name() : "NORMAL";
@@ -296,14 +297,16 @@ public class DaemonSocketServer {
         }
 
         String reason = r.diagnosis() != null ? r.diagnosis().reason() : null;
-        String recommendationId = r.diagnosis() != null ? r.diagnosis().recommendationId().shortDescription() : null;
+        RecommendationId recommendationId = r.diagnosis() != null && r.diagnosis().recommendationId() != null
+                ? r.diagnosis().recommendationId()
+                : RecommendationId.COLLECT_MORE_SIGNALS;
 
         return new ProcessSummary(
                 r.pid(), appName, category, weight,
                 used, max,
                 severity, diagnosis,
                 leakSignal, loadSignal, gcSignal,
-                reason, recommendationId,
+                reason, recommendationId.name(),
                 collecting
         );
     }

@@ -130,7 +130,8 @@ public class DaemonMain {
             // "collecting" = diagnosis is null OR the reason explicitly
             // says we're still gathering samples
             boolean stillCollecting = r.diagnosis() == null
-                    || r.diagnosis().reason().startsWith("collecting");
+                    || (r.diagnosis().reason() != null
+                    && r.diagnosis().reason().startsWith("collecting"));
 
             if (stillCollecting) {
                 sb.append(String.format("  %-32s  collecting...%n", app));

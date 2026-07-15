@@ -140,6 +140,40 @@ public record MemorySignal(
         );
     }
 
+    /**
+     * Backward-compatible convenience constructor for tests and older
+     * call sites that only care about the core heap/GC trend signals.
+     */
+    public MemorySignal(
+            double heapUsedRatio,
+            double gcTimeRatio,
+            double gcFrequencyPerSecond,
+            double postGcFloorSlopePerSecond,
+            double allocationRateBytesPerSecond,
+            int sampleCount) {
+        this(
+                heapUsedRatio,
+                gcTimeRatio,
+                gcFrequencyPerSecond,
+                postGcFloorSlopePerSecond,
+                allocationRateBytesPerSecond,
+                -1L,
+                -1L,
+                -1L,
+                -1L,
+                -1L,
+                -1L,
+                UNAVAILABLE,
+                UNAVAILABLE,
+                UNAVAILABLE,
+                UNAVAILABLE,
+                -1L,
+                UNAVAILABLE,
+                sampleCount,
+                -1L
+        );
+    }
+
     public boolean hasSufficientData(int minSamples) {
         return sampleCount >= minSamples;
     }

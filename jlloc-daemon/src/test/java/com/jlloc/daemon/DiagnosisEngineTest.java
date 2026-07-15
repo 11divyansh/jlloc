@@ -8,13 +8,30 @@ class DiagnosisEngineTest {
 
     private final DiagnosisEngine engine = new DiagnosisEngine();
 
+    private static MemorySignal signal(
+            double heapUsedRatio,
+            double gcTimeRatio,
+            double gcFrequencyPerSecond,
+            double postGcFloorSlopePerSecond,
+            double allocationRateBytesPerSecond,
+            int sampleCount) {
+        return new MemorySignal(
+                heapUsedRatio,
+                gcTimeRatio,
+                gcFrequencyPerSecond,
+                postGcFloorSlopePerSecond,
+                allocationRateBytesPerSecond,
+                sampleCount
+        );
+    }
+
     @Test
     void insufficientDataProducesUnknownNormal() {
         DiagnosisResult r = engine.diagnose(MemorySignal.insufficient(3));
         assertEquals(DiagnosisResult.Severity.NORMAL, r.severity());
         assertEquals(DiagnosisResult.Diagnosis.UNKNOWN, r.diagnosis());
         assertTrue(r.reason().contains("collecting data"));
-        assertNull(r.recommendation());
+        assertNull(r.recommendationId());
     }
 
     /**
@@ -25,7 +42,7 @@ class DiagnosisEngineTest {
      */
     @Test
     void criticalAlwaysWinsOverLeakDiagnosis() {
-        MemorySignal signal = new MemorySignal(
+        MemorySignal signal = signal(
                 0.95,     // heapUsedRatio
                 0.92,     // gcTimeRatio - 92%, above CRITICAL threshold
                 2.0,      // gcFrequencyPerSecond
@@ -38,15 +55,12 @@ class DiagnosisEngineTest {
 
         assertEquals(DiagnosisResult.Severity.CRITICAL, r.severity(),
                 "92% GC time must produce CRITICAL severity regardless of diagnosis");
-        // Diagnosis may be LEAK or UNKNOWN - that's fine.
-        // The point is severity is CRITICAL, and a recommendation exists.
-        assertNotNull(r.recommendation());
-        assertTrue(r.recommendation().contains("jlloc"));
+        assertEquals(RecommendationId.TAKE_HEAP_DUMP, r.recommendationId());
     }
 
     @Test
     void criticalOnHeapAloneWhenGcDataUnavailable() {
-        MemorySignal signal = new MemorySignal(
+        MemorySignal signal = signal(
                 0.98,                      // heapUsedRatio - above critical threshold
                 MemorySignal.UNAVAILABLE,  // gcTimeRatio - not available
                 0.0,
@@ -61,7 +75,7 @@ class DiagnosisEngineTest {
 
     @Test
     void warningWhenHeapHighButNotCritical() {
-        MemorySignal signal = new MemorySignal(
+        MemorySignal signal = signal(
                 0.85,   // above WARNING_HEAP_RATIO (0.80), below CRITICAL (0.97)
                 0.10,   // GC time low
                 0.2,
@@ -72,11 +86,12 @@ class DiagnosisEngineTest {
 
         DiagnosisResult r = engine.diagnose(signal);
         assertEquals(DiagnosisResult.Severity.WARNING, r.severity());
+        assertEquals(RecommendationId.INCREASE_XMX, r.recommendationId());
     }
 
     @Test
     void leakDiagnosedWhenFloorRisingWithLowAllocation() {
-        MemorySignal signal = new MemorySignal(
+        MemorySignal signal = signal(
                 0.72,     // heapUsedRatio - above leak threshold
                 0.15,     // gcTimeRatio - moderate
                 0.8,      // gcFrequencyPerSecond
@@ -88,11 +103,12 @@ class DiagnosisEngineTest {
         DiagnosisResult r = engine.diagnose(signal);
         assertEquals(DiagnosisResult.Diagnosis.LEAK, r.diagnosis(),
                 "Rising floor + low allocation should be LEAK: " + r.reason());
+        assertEquals(RecommendationId.TAKE_HEAP_DUMP, r.recommendationId());
     }
 
     @Test
     void loadDiagnosedWhenHighAllocationAndStableFloor() {
-        MemorySignal signal = new MemorySignal(
+        MemorySignal signal = signal(
                 0.85,        // heapUsedRatio
                 0.12,        // gcTimeRatio
                 0.3,
@@ -105,11 +121,12 @@ class DiagnosisEngineTest {
         assertEquals(DiagnosisResult.Severity.WARNING, r.severity());
         assertEquals(DiagnosisResult.Diagnosis.LOAD, r.diagnosis(),
                 "High alloc + stable floor should be LOAD: " + r.reason());
+        assertEquals(RecommendationId.INCREASE_XMX, r.recommendationId());
     }
 
     @Test
     void normalHealthyWhenAllSignalsQuiet() {
-        MemorySignal signal = new MemorySignal(
+        MemorySignal signal = signal(
                 0.20,     // heap low
                 0.01,     // GC almost nothing
                 0.05,
@@ -121,12 +138,12 @@ class DiagnosisEngineTest {
         DiagnosisResult r = engine.diagnose(signal);
         assertEquals(DiagnosisResult.Severity.NORMAL, r.severity());
         assertEquals(DiagnosisResult.Diagnosis.HEALTHY, r.diagnosis());
-        assertNull(r.recommendation(), "NORMAL/HEALTHY should have no recommendation");
+        assertEquals(RecommendationId.NOTHING_REQUIRED, r.recommendationId());
     }
 
     @Test
     void signalStrengthLabelsAreNotPercentages() {
-        MemorySignal signal = new MemorySignal(0.5, 0.1, 0.2, 60_000, 2_000_000, 20);
+        MemorySignal signal = signal(0.5, 0.1, 0.2, 60_000, 2_000_000, 20);
         DiagnosisResult r = engine.diagnose(signal);
 
         // Labels should be words not numbers, to avoid the "79+50=129%" confusion
@@ -140,11 +157,10 @@ class DiagnosisEngineTest {
 
     @Test
     void criticalAlwaysHasARecommendation() {
-        MemorySignal critical = new MemorySignal(0.98, 0.95, 3.0, 500_000, 100_000, 20);
+        MemorySignal critical = signal(0.98, 0.95, 3.0, 500_000, 100_000, 20);
         DiagnosisResult r = engine.diagnose(critical);
 
         assertEquals(DiagnosisResult.Severity.CRITICAL, r.severity());
-        assertNotNull(r.recommendation(), "CRITICAL must always have a recommendation");
-        assertFalse(r.recommendation().isBlank());
+        assertNotNull(r.recommendationId(), "CRITICAL must always have a recommendation");
     }
 }

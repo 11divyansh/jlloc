@@ -133,7 +133,7 @@ public class FingerprintRegistry {
         boolean matchesName(String text) {
             String lowerText = text.toLowerCase();
             for (String marker : nameContains) {
-                if (matchType.test(lowerText, marker.toLowerCase(), marker)) {
+                if (matchType.test(text, lowerText, marker.toLowerCase(), marker)) {
                     return true;
                 }
             }
@@ -160,42 +160,42 @@ public class FingerprintRegistry {
     public enum MatchType {
         CONTAINS {
             @Override
-            boolean test(String lowerText, String lowerMarker, String originalMarker) {
+            boolean test(String originalText, String lowerText, String lowerMarker, String originalMarker) {
                 return lowerText.contains(lowerMarker);
             }
         },
         EQUALS {
             @Override
-            boolean test(String lowerText, String lowerMarker, String originalMarker) {
+            boolean test(String originalText, String lowerText, String lowerMarker, String originalMarker) {
                 return lowerText.equals(lowerMarker);
             }
         },
         PREFIX {
             @Override
-            boolean test(String lowerText, String lowerMarker, String originalMarker) {
+            boolean test(String originalText, String lowerText, String lowerMarker, String originalMarker) {
                 return lowerText.startsWith(lowerMarker);
             }
         },
         SUFFIX {
             @Override
-            boolean test(String lowerText, String lowerMarker, String originalMarker) {
+            boolean test(String originalText, String lowerText, String lowerMarker, String originalMarker) {
                 return lowerText.endsWith(lowerMarker);
             }
         },
         REGEX {
             @Override
-            boolean test(String lowerText, String lowerMarker, String originalMarker) {
+            boolean test(String originalText, String lowerText, String lowerMarker, String originalMarker) {
                 // Regex markers are matched case-sensitively against the
-                // ORIGINAL text/pattern, not the lowercased versions -
-                // lowercasing a regex pattern can silently change its
+                // ORIGINAL text/pattern, not the lowercased versions.
+                // Lowercasing a regex pattern can silently change its
                 // meaning (e.g. character classes), so this is the one
                 // match type that opts out of the case-insensitive
                 // convention the others use.
-                return Pattern.compile(originalMarker).matcher(lowerText).find();
+                return Pattern.compile(originalMarker).matcher(originalText).find();
             }
         };
 
-        abstract boolean test(String lowerText, String lowerMarker, String originalMarker);
+        abstract boolean test(String originalText, String lowerText, String lowerMarker, String originalMarker);
 
         static MatchType fromString(String value) {
             try {
