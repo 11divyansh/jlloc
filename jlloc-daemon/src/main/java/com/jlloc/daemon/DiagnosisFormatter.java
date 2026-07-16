@@ -101,6 +101,7 @@ public class DiagnosisFormatter {
                     ? String.format("RSS at %.0f%% of container limit",
                     signal.containerMemoryPressure() * 100)
                     : "Host memory pressure";
+            case WARMUP -> "Starting up — floor rising is normal warmup";
             case UNKNOWN -> "Insufficient data — collecting signals";
         };
     }

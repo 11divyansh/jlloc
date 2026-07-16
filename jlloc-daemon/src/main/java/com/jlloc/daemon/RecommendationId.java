@@ -113,6 +113,12 @@ public enum RecommendationId {
     COLLECT_MORE_SIGNALS,
 
     /**
+     * Process is still within its startup window. No action just wait.
+     * Triggered by: WARMUP diagnosis.
+     */
+    WARMING_UP,
+
+    /**
      * Swap thrashing detected. Take the pod out of service rotation
      * immediately before Kubernetes kills it.
      * Triggered by: HOST_MEMORY_PRESSURE / CRITICAL with swap rate signals.
@@ -139,7 +145,8 @@ public enum RecommendationId {
             case REVIEW_GC_CONFIGURATION   -> "Review GC configuration.";
             case PROFILE_ALLOCATIONS       -> "Profile allocation sites.";
             case INSPECT_CACHE             -> "Inspect for an unbounded cache.";
-            case COLLECT_MORE_SIGNALS      -> "Insufficient signal to explain this — collecting more data.";
+            case COLLECT_MORE_SIGNALS      -> "Insufficient signal to explain this collecting more data.";
+            case WARMING_UP                -> "Process in startup window. Warming up.";
             case EMERGENCY_REDUCE_FOOTPRINT-> "EMERGENCY: reduce JVM memory footprint now.";
         };
     }

@@ -17,16 +17,13 @@ import java.nio.file.Path;
  */
 public class ProfileStore {
 
-    private static final Path PROFILE_DIR =
-            Path.of(System.getProperty("user.home"), ".jlloc", "profiles");
+    private static final Path PROFILE_DIR = Path.of(System.getProperty("user.home"), ".jlloc", "profiles");
 
     private final ObjectMapper mapper = new ObjectMapper();
 
     public MemoryProfile load(String appName) {
         Path file = pathFor(appName);
-        if (!Files.exists(file)) {
-            return MemoryProfile.defaultFor(appName);
-        }
+        if (!Files.exists(file)) {return MemoryProfile.defaultFor(appName);}
         try {
             return mapper.readValue(file.toFile(), MemoryProfile.class);
         } catch (IOException e) {
@@ -39,13 +36,11 @@ public class ProfileStore {
     public void save(MemoryProfile profile) {
         try {
             Files.createDirectories(PROFILE_DIR);
-            Files.writeString(pathFor(profile.appName()),
-                    mapper.writerWithDefaultPrettyPrinter().writeValueAsString(profile));
+            Files.writeString(pathFor(profile.appName()), mapper.writerWithDefaultPrettyPrinter().writeValueAsString(profile));
         } catch (IOException e) {
             // a failed profile write shouldn't take down
             // the monitoring loop. Log and move on.
-            System.err.println("[jlloc] failed to save profile for "
-                    + profile.appName() + ": " + e.getMessage());
+            System.err.println("[jlloc] failed to save profile for " + profile.appName() + ": " + e.getMessage());
         }
     }
 

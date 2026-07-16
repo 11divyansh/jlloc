@@ -76,7 +76,18 @@ public record DiagnosisResult(
          * only becomes visible once jlloc can see both JVM and OS/cgroup
          * signals together, not JVM-internal signals alone.
          */
-        HOST_MEMORY_PRESSURE
+        HOST_MEMORY_PRESSURE,
+
+        /**
+         * Rising post-GC floor detected, but the process is still within
+         * its learned (or default) startup window. Classloading, cache
+         * warmup, and Hibernate/Spring internals filling up produce the
+         * same floor-rising signature as a real leak this diagnosis
+         * says "can't tell yet" honestly rather than falsely claiming
+         * HEALTHY or falsely alarming LEAK. Recheck after the window
+         * closes; if the floor is still rising then, it's likely real.
+         */
+        WARMUP
     }
 
     /**

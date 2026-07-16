@@ -84,6 +84,14 @@ public class RecommendationEngine {
                             + "Then: jcmd <pid> VM.native_memory",
                     null
             );
+            case WARMING_UP -> new Recommendation(
+                    id,
+                    "Still starting up, wait.",
+                    "This process is within its normal startup window. Floor is rising because of "
+                            + "classloading and cache warmup, not a leak. No action needed yet "
+                            + "re-check after the warmup window closes.",
+                    null
+            );
             case ENABLE_NMT, REVIEW_GC_CONFIGURATION, PROFILE_ALLOCATIONS, INSPECT_CACHE ->
                     new Recommendation(
                             id,
