@@ -1,5 +1,7 @@
 package com.jlloc.daemon;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 /**
  * Persistent, per-app historical memory record, stored to
  * ~/.jlloc/profiles/<appName>.json between runs.
@@ -40,6 +42,7 @@ public record MemoryProfile(
         return new MemoryProfile(appName, 256L * 1024 * 1024, 256L * 1024 * 1024, 30, 0);
     }
 
+    @JsonIgnore
     public boolean isFromRealObservation() {
         return observedSessions > 0;
     }

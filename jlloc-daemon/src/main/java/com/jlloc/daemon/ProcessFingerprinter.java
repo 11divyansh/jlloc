@@ -64,10 +64,33 @@ public class ProcessFingerprinter {
             // the clean name rather than a raw path or class name
             appName = rule.id();
         } else {
-            appName = extractJarName(name);
+            appName = normalizeAppName(name);
         }
 
         return new Classification(jvm.pid(), rule.category(), appName, rule.priorityWeight());
+    }
+
+    /**
+     * Normalizes any raw name-like string (a full command line, a
+     * fully-qualified class name, a jar path) into the same clean,
+     * short form regardless of which code path produced it.
+     *
+     */
+    private static String normalizeAppName(String raw) {
+        if (raw == null || raw.isBlank()) return raw;
+
+        // Command lines have args after the first space take the
+        // first token before doing anything else
+        int spaceIndex = raw.indexOf(' ');
+        String first = spaceIndex > 0 ? raw.substring(0, spaceIndex) : raw;
+
+        if (first.contains("/") || first.contains("\\") || first.endsWith(".jar")) {
+            return extractJarName(first);
+        }
+        if (first.contains(".")) {
+            return first.substring(first.lastIndexOf('.') + 1);
+        }
+        return first;
     }
 
     /**
@@ -90,19 +113,24 @@ public class ProcessFingerprinter {
                 FingerprintRegistry.FingerprintRule rule = registry.matchBySystemProperty(props);
                 if (rule != null) {
                     String markerValue = firstNonBlankMarkerValue(props, rule);
-                    String appName = markerValue != null ? markerValue : rule.id();
+                    String appName = markerValue != null ? normalizeAppName(markerValue) : rule.id();
                     return new Classification(jvm.pid(), rule.category(), appName, rule.priorityWeight());
                 }
 
-                // NOTE: we deliberately do NOT check java.class.path for
-                // framework jars here - classpath presence is not proof
-                // of usage and produced real false positives in testing
-                // (see git history). Removed intentionally, not an
-                // oversight.
 
+                // sun.java.command fallback, firstToken() already does this work,
+                // so just delegate to the shared function for consistency
                 String command = props.getProperty("sun.java.command", "");
                 if (!command.isBlank()) {
-                    return new Classification(jvm.pid(), shallow.category(), firstToken(command), shallow.priorityWeight());
+                    String normalized = normalizeAppName(command);
+                    // Re-check the registry against the NORMALIZED name.
+                    List<FingerprintRegistry.FingerprintRule> matches = registry.matchByName(normalized);
+                    if (!matches.isEmpty()) {
+                        FingerprintRegistry.FingerprintRule rule2 = matches.get(0);
+                        return new Classification(jvm.pid(), rule2.category(), normalized, rule2.priorityWeight());
+                    }
+
+                    return new Classification(jvm.pid(), shallow.category(), normalized, shallow.priorityWeight());
                 }
             } finally {
                 vm.detach();
@@ -163,11 +191,4 @@ public class ProcessFingerprinter {
      */
     public record Classification(long pid, String category, String appName, int priorityWeight) {
     }
-
-    /**
-     * Manual verification of this class now lives in
-     * src/test/java/com/jlloc/daemon/ProcessFingerprinterTest.java
-     * rather than a main() method here - see DaemonMain for the real
-     * entry point.
-     */
 }

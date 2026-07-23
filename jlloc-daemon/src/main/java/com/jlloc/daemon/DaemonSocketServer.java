@@ -139,6 +139,18 @@ public class DaemonSocketServer {
     private Response handleExplain(String service) {
         Optional<ProcessRepository.ProcessRecord> record = findByService(service);
         if (record.isEmpty()) {
+            String lower = service.toLowerCase();
+            List<String> possibleMatches = repository.all().stream()
+                    .filter(r -> r.classification() != null
+                            && r.classification().appName().toLowerCase().contains(lower))
+                    .map(r -> r.classification().appName() + " (PID " + r.pid() + ")")
+                    .toList();
+
+            if (possibleMatches.size() > 1) {
+                return new ErrorResponse("Multiple processes match '" + service + "': "
+                        + String.join(", ", possibleMatches)
+                        + ". Use a PID or a more specific name.");
+            }
             return new ErrorResponse("No process found matching: " + service
                     + ". Run 'jlloc status' to see monitored services.");
         }
@@ -202,7 +214,7 @@ public class DaemonSocketServer {
                 rec.command(),
 
                 signal.sampleCount(),
-                6,   // MIN_SAMPLES, consider exposing this as a public constant
+                DiagnosisEngine.MIN_SAMPLES,   // MIN_SAMPLES, consider exposing this as a public constant
                 // on DiagnosisEngine instead of duplicating "6" here
 
                 signalLines
@@ -266,10 +278,24 @@ public class DaemonSocketServer {
 
         // App name substring match, case-insensitive
         String lower = service.toLowerCase();
-        return repository.all().stream()
+        Optional<ProcessRepository.ProcessRecord> exact = repository.all().stream()
+                .filter(r -> r.classification() != null
+                        && r.classification().appName().equalsIgnoreCase(service)).findFirst();
+        if (exact.isPresent()) {
+            return exact;
+        }
+        List<ProcessRepository.ProcessRecord> substringMatches = repository.all().stream()
                 .filter(r -> r.classification() != null
                         && r.classification().appName().toLowerCase().contains(lower))
-                .findFirst();
+                .toList();
+
+        if (substringMatches.size() == 1) {
+            return Optional.of(substringMatches.get(0));
+        }
+
+        // Ambiguous (0 or 2+ substring matches) return empty and let
+        // the caller produce a helpful message rather than guessing.
+        return Optional.empty();
     }
 
     private ProcessSummary toSummary(ProcessRepository.ProcessRecord r) {

@@ -19,7 +19,14 @@ import java.util.function.Consumer;
 public class JvmProcessWatcher {
 
     private static final long POLL_INTERVAL_SECONDS = 2;
-
+    // Process names that are jlloc's own tooling talking to itself over
+    // the socket - short-lived, not a real monitoring target. Without
+    // this, every `jlloc status`/`explain` invocation shows up as a
+    // spurious start/stop blip in the JVM list.
+    private static final Set<String> SELF_PROCESS_MARKERS = Set.of(
+            "CliMain",
+            ":jlloc-cli:run"
+    );
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "jlloc-process-watcher");
         t.setDaemon(true);
@@ -70,6 +77,10 @@ public class JvmProcessWatcher {
         scheduler.shutdownNow();
     }
 
+    private static boolean isSelfProcess(String displayName) {
+        if (displayName == null) return false;
+        return SELF_PROCESS_MARKERS.stream().anyMatch(displayName::contains);
+    }
     /**
      * One discovery cycle: list every attachable JVM right now,
      * compare against what we knew last time, fire callbacks for
@@ -96,6 +107,12 @@ public class JvmProcessWatcher {
             // would otherwise show up in its own process list, which
             // is noise nobody wants in `jlloc status`.
             if (pid == ProcessHandle.current().pid()) {
+                continue;
+            }
+
+            // Skip jlloc's own CLI client processes — same reasoning as
+            // excluding our own PID above, just by name instead of PID.
+            if (isSelfProcess(descriptor.displayName())) {
                 continue;
             }
 

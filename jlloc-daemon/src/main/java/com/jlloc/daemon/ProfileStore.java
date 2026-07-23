@@ -1,5 +1,6 @@
 package com.jlloc.daemon;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -19,7 +20,7 @@ public class ProfileStore {
 
     private static final Path PROFILE_DIR = Path.of(System.getProperty("user.home"), ".jlloc", "profiles");
 
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper = new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public MemoryProfile load(String appName) {
         Path file = pathFor(appName);

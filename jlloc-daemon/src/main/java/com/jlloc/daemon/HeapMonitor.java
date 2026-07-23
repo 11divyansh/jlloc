@@ -1,5 +1,6 @@
 package com.jlloc.daemon;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,6 +30,8 @@ public class HeapMonitor {
 
     private final Map<Long, HeapTimeline> timelines = new ConcurrentHashMap<>();
 
+    private final Map<Long, ProfileSession> sessions = new ConcurrentHashMap<>();
+    private final ProfileStore profileStore = new ProfileStore();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "jlloc-heap-monitor");
         t.setDaemon(true);
@@ -65,8 +68,25 @@ public class HeapMonitor {
     }
 
     public void forgetPid(long pid) {
+        ProfileSession session = sessions.remove(pid);
+        if (session != null && session.hasStableSamples() && isProfilable(session.appName())){
+            // Only persist if this run actually got past warmup a
+            // process killed within seconds of starting has nothing
+            // meaningful to merge and would drag the average down with
+            // effectively a zero-ish reading.
+            MemoryProfile prior = profileStore.load(session.appName());
+            MemoryProfile updated = session.mergeInto(prior);
+            profileStore.save(updated);
+        }
         timelines.remove(pid);
         signalExtractor.forgetPid(pid);
+    }
+
+    // "unknown" has no stable identity across processes — persisting a
+    // profile under that name would silently merge learning from
+    // unrelated JVMs. Skip until it's actually been fingerprinted.
+    private static boolean isProfilable(String appName) {
+        return appName != null && !"unknown".equalsIgnoreCase(appName);
     }
 
     /**
@@ -108,20 +128,34 @@ public class HeapMonitor {
 
             HeapTimeline timeline = timelines.computeIfAbsent(record.pid(), pid -> new HeapTimeline());
             timeline.add(sample);
-
             repository.updateHeapStats(record.pid(), stats);
 
             MemorySignal signal = signalExtractor.extract(timeline, jmx, record.pid());
-            DiagnosisResult diagnosis = diagnosisEngine.diagnose(signal);
+            Duration uptime = Duration.between(record.detectedJvm().detectedAt(), Instant.now());
+            MemoryProfile profile = record.memoryProfile();
+            if (profile == null) {
+                // Defensive fallback should normally already be set by
+                // DaemonMain.onJvmStarted before HeapMonitor's polling thread
+                // ever sees this PID, but the two run on separate schedulers
+                // with no shared lock, so don't let a timing gap crash
+                // diagnosis. Missing history just means "no learned baseline
+                // yet" — the same as MemoryProfile.defaultFor() would say.
+                String appName = record.classification() != null
+                        ? record.classification().appName() : "unknown";
+                profile = MemoryProfile.defaultFor(appName);
+            }
+            DiagnosisResult diagnosis = diagnosisEngine.diagnose(signal, uptime, profile);
 
             DiagnosisResult previous = record.diagnosis();
             repository.updateDiagnosis(record.pid(), diagnosis);
             repository.updateLastSignal(record.pid(), signal);
 
+            String appName = record.classification() != null ? record.classification().appName() : "unknown";
+            ProfileSession session = sessions.computeIfAbsent(record.pid(), pid -> new ProfileSession(appName, record.detectedJvm().detectedAt()));
+            session.recordSample(signal, diagnosis.diagnosis(), Instant.now());
             // Fire alert only on severity worsening, not on every poll,
             // and not for diagnosis-only changes while severity stays NORMAL
-            if (isWorseSeverity(diagnosis.severity(),
-                previous == null ? null : previous.severity())) {
+            if (isWorseSeverity(diagnosis.severity(), previous == null ? null : previous.severity())) {
                 onAlert.accept(new AlertEvent(record, diagnosis));
             }
         }

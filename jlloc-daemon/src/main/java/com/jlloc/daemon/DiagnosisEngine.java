@@ -1,5 +1,6 @@
 package com.jlloc.daemon;
 
+import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -30,7 +31,7 @@ import java.time.Instant;
  */
 public class DiagnosisEngine {
 
-    private static final int MIN_SAMPLES = 6;
+    static final int MIN_SAMPLES = 6;
 
     // Hard thresholds for severity not scores, hard rules
     private static final double CRITICAL_GC_RATIO      = 0.80;
@@ -63,7 +64,17 @@ public class DiagnosisEngine {
     // If leak and load signals are within this many points, call it UNKNOWN
     private static final int AMBIGUITY_BAND             = 15;
 
-    public DiagnosisResult diagnose(MemorySignal signal) {
+    // Fallback used when this app has no learned profile yet (first
+    // time jlloc has ever seen it). Once MemoryProfile has real
+    // observations, its avgStartupSeconds replaces this per app.
+    private static final Duration DEFAULT_WARMUP_WINDOW = Duration.ofSeconds(90);
+
+    // Learned avgStartupSeconds is an AVERAGE, not a worst case — pad
+    // it so a slightly-slower-than-usual startup doesn't immediately
+    // get flagged as a false LEAK the moment it crosses the average.
+    private static final double WARMUP_SAFETY_MARGIN = 1.2;
+
+    public DiagnosisResult diagnose(MemorySignal signal, Duration uptime, MemoryProfile profile) {
         if (!signal.hasSufficientData(MIN_SAMPLES)) {
             return new DiagnosisResult(
                     DiagnosisResult.Severity.NORMAL,
@@ -93,10 +104,35 @@ public class DiagnosisEngine {
         );
 
         DiagnosisResult.Diagnosis diagnosis = determineDiagnosis(leakSignal, loadSignal, signal);
+        // Warmup override, applied AFTER the normal diagnosis decision,
+        // same pattern as CRITICAL overriding severity. Only downgrades
+        // LEAK; LOAD/HEALTHY/HOST_MEMORY_PRESSURE during warmup aren't
+        // misleading and are left alone.
+        Duration warmupWindow = warmupWindowFor(profile);
+        boolean stillWarmingUp = uptime.compareTo(warmupWindow) < 0;
+        if ((diagnosis == DiagnosisResult.Diagnosis.LEAK || diagnosis == DiagnosisResult.Diagnosis.UNKNOWN)
+                && severity != DiagnosisResult.Severity.CRITICAL
+                && stillWarmingUp) {
+            diagnosis = DiagnosisResult.Diagnosis.WARMUP;
+        }
         RecommendationId recommendationId = determineRecommendationId(severity, diagnosis, signal);
-        String reason = buildReason(diagnosis, signal, strengths);
+        String reason = buildReason(diagnosis, signal, strengths, profile, uptime, warmupWindow);
 
         return new DiagnosisResult(severity, diagnosis, reason, recommendationId, strengths, Instant.now());
+    }
+
+    /**
+     * The per-app warmup window. Uses the learned average from
+     * MemoryProfile once real observations exist, padded by
+     * WARMUP_SAFETY_MARGIN; falls back to the global default for an
+     * app jlloc has never profiled before.
+     */
+    private static Duration warmupWindowFor(MemoryProfile profile) {
+        if (profile != null && profile.isFromRealObservation()) {
+            long seconds = Math.round(profile.avgStartupSeconds() * WARMUP_SAFETY_MARGIN);
+            return Duration.ofSeconds(Math.max(seconds, 10)); // sanity floor
+        }
+        return DEFAULT_WARMUP_WINDOW;
     }
 
     private static DiagnosisResult.Severity determineSeverity(MemorySignal signal) {
@@ -188,6 +224,7 @@ public class DiagnosisEngine {
         return switch (diagnosis) {
             case HEALTHY -> RecommendationId.NOTHING_REQUIRED;
             case LEAK    -> RecommendationId.TAKE_HEAP_DUMP;
+            case WARMUP  -> RecommendationId.WARMING_UP;
             case LOAD    -> {
                 boolean highAlloc = signal.isAllocationRateAvailable()
                         && signal.allocationRateBytesPerSecond() > HIGH_ALLOC_RATE;
@@ -276,8 +313,23 @@ public class DiagnosisEngine {
     private static String buildReason(
             DiagnosisResult.Diagnosis diagnosis,
             MemorySignal signal,
-            DiagnosisResult.SignalStrengths s
+            DiagnosisResult.SignalStrengths s,
+            MemoryProfile profile,
+            Duration uptime,
+            Duration warmupWindow
     ) {
+        if (diagnosis == DiagnosisResult.Diagnosis.WARMUP) {
+            String basis = (profile != null && profile.isFromRealObservation())
+                    ? String.format("learned from %d prior run(s), avg startup %ds",
+                    profile.observedSessions(), profile.avgStartupSeconds())
+                    : "default heuristic — no history yet for this app";
+            return String.format(
+                    "Floor is rising, but this looks like normal startup warmup, not a leak.%n"
+                            + "Uptime .......... %ds%n"
+                            + "Warmup window ... %ds (%s)%n"
+                            + "Recheck after the window closes — if the floor is still rising then, it's likely real.",
+                    uptime.toSeconds(), warmupWindow.toSeconds(), basis);
+        }
         // HOST_MEMORY_PRESSURE gets its own reason format the evidence
         // that justifies this diagnosis lives in Layer 2/3 signals, not
         // the heap/GC/leak lines used for JVM-internal diagnoses. Showing
@@ -285,8 +337,7 @@ public class DiagnosisEngine {
         // fine" is itself an important, easily-misread part of the story.
         if (diagnosis == DiagnosisResult.Diagnosis.HOST_MEMORY_PRESSURE) {
             StringBuilder sb = new StringBuilder();
-            sb.append(String.format("Heap ........... %.1f%% (JVM-internal — not the problem)%n",
-                    signal.heapUsedRatio() * 100));
+            sb.append(String.format("Heap ........... %.1f%% (JVM-internal — not the problem)%n", signal.heapUsedRatio() * 100));
 
             sb.append(signal.isRssAvailable()
                     ? String.format("RSS ............ %.0f MB%n", signal.rssBytes() / (1024.0 * 1024))
@@ -317,8 +368,7 @@ public class DiagnosisEngine {
                 signal.allocationRateBytesPerSecond() / (1024.0 * 1024.0))
                 : "Allocation ..... unavailable";
 
-        String leakLine = String.format("Leak signal .... %s (%d/100)",
-                s.leakLabel(), s.leakSignal());
+        String leakLine = String.format("Leak signal .... %s (%d/100)", s.leakLabel(), s.leakSignal());
 
         String slopeLine = signal.isFloorSlopeAvailable()
                 ? String.format("Floor slope .... %+.1f KB/s",

@@ -28,11 +28,23 @@ public class ProfileSession {
      * average only once warmup has ended.
      */
     public void recordSample(MemorySignal signal, DiagnosisResult.Diagnosis diagnosis, Instant now) {
+        if (!signal.hasSufficientData(DiagnosisEngine.MIN_SAMPLES) || !signal.isHeapMaxAvailable()) {
+            // Nothing real to learn from yet MemorySignal.insufficient()
+            // returns UNAVAILABLE (-1) sentinels for heapUsedRatio and
+            // heapMaxBytes; multiplying those together produces a
+            // meaningless small number that would otherwise silently
+            // pollute the running average.
+            return;
+        }
         long heapUsedBytes = (long) (signal.heapUsedRatio() * signal.heapMaxBytes());
         peakHeapUsedBytes = Math.max(peakHeapUsedBytes, heapUsedBytes);
 
-        boolean stillWarming = diagnosis == DiagnosisResult.Diagnosis.WARMUP;
-        if (!stillWarming) {
+        // Treat both WARMUP and UNKNOWN as "not yet stable" — UNKNOWN
+        // in the first real samples after MIN_SAMPLES is reached is
+        // still noise, not a confirmed stable reading, and shouldn't
+        // mark warmup as ended.
+        boolean stillWarmingOrUncertain = diagnosis == DiagnosisResult.Diagnosis.WARMUP || diagnosis == DiagnosisResult.Diagnosis.UNKNOWN;
+        if (!stillWarmingOrUncertain) {
             if (warmupEndedAt == null) {
                 warmupEndedAt = now;
             }
@@ -51,24 +63,23 @@ public class ProfileSession {
     public MemoryProfile mergeInto(MemoryProfile prior) {
         long sessionAvgHeap = stableHeapSamples > 0
                 ? stableHeapSum / stableHeapSamples
-                : peakHeapUsedBytes; // no stable samples ever recorded — fall back to peak
+                : peakHeapUsedBytes; // no stable samples ever recorded fall back to peak
 
         int startupSeconds = warmupEndedAt != null
                 ? (int) Duration.between(startedAt, warmupEndedAt).toSeconds()
-                : prior.avgStartupSeconds(); // never stabilized this session — don't corrupt the average
+                : prior.avgStartupSeconds(); // never stabilized this session don't corrupt the average
 
         int priorSessions = prior.observedSessions();
         int newSessions = priorSessions + 1;
 
-        long newAvgHeap = priorSessions == 0
-                ? sessionAvgHeap
-                : (prior.avgHeapBytes() * priorSessions + sessionAvgHeap) / newSessions;
+        long newAvgHeap = priorSessions == 0 ? sessionAvgHeap : (prior.avgHeapBytes() * priorSessions + sessionAvgHeap) / newSessions;
 
-        int newAvgStartup = priorSessions == 0
-                ? startupSeconds
-                : (prior.avgStartupSeconds() * priorSessions + startupSeconds) / newSessions;
+        int newAvgStartup = priorSessions == 0 ? startupSeconds : (prior.avgStartupSeconds() * priorSessions + startupSeconds) / newSessions;
 
         long newPeak = Math.max(prior.peakHeapBytes(), peakHeapUsedBytes);
         return new MemoryProfile(appName, newAvgHeap, newPeak, newAvgStartup, newSessions);
     }
+
+    public String appName() { return appName; }
+    public boolean hasStableSamples() { return stableHeapSamples > 0; }
 }

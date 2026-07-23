@@ -24,6 +24,7 @@ public class DaemonMain {
 
         ProcessRepository repository = new ProcessRepository();
         ProcessFingerprinter fingerprinter = new ProcessFingerprinter();
+        ProfileStore profileStore = new ProfileStore();
         JvmProcessWatcher watcher = new JvmProcessWatcher();
         HeapMonitor heapMonitor = new HeapMonitor(repository);
         boolean debugMode = "true".equalsIgnoreCase(System.getenv("JLLOC_DEBUG"));
@@ -49,6 +50,11 @@ public class DaemonMain {
             JvmCapabilities capabilities = JmxConnector.probeCapabilities(jvm.pid());
             repository.updateCapabilities(jvm.pid(), capabilities);
 
+            // Load this app's learned history (or a conservative default the
+            // first time jlloc has ever seen it) so DiagnosisEngine can use a
+            // real per-app warmup window instead of one blind global constant.
+            MemoryProfile profile = profileStore.load(classification.appName());
+            repository.updateMemoryProfile(jvm.pid(), profile);
             repository.get(jvm.pid()).ifPresent(r -> printStarted(r));
         });
 

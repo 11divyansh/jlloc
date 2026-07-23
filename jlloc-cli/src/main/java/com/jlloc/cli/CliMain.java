@@ -141,7 +141,7 @@ public class CliMain {
         ProcessSummary p = r.process();
         System.out.println();
         System.out.printf("  %s  (PID %d)%n", p.appName(), p.pid());
-        System.out.println("  " + "─".repeat(52));
+        System.out.println("  " + "-".repeat(52));
         System.out.printf("  Severity:    %s%n", p.severity());
         System.out.printf("  Diagnosis:   %s%n", p.diagnosis());
         System.out.println();
@@ -220,8 +220,8 @@ public class CliMain {
         // Recommendation block
         if (r.shortAdvice() != null) {
             System.out.println();
-            System.out.println("  " + "─".repeat(52));
-            System.out.println("  → " + r.shortAdvice());
+            System.out.println("  " + "-".repeat(52));
+            System.out.println("  -> " + r.shortAdvice());
 
             if (r.fullAdvice() != null && !r.fullAdvice().equals(r.shortAdvice())) {
                 System.out.println();
@@ -269,12 +269,12 @@ public class CliMain {
 
     private static String alertFlag(ProcessSummary p) {
         return switch (p.severity()) {
-            case "CRITICAL" -> "⚠  act now";
+            case "CRITICAL" -> "!! act now";
             case "WARNING"  -> switch (p.diagnosis()) {
-                case "LEAK"                -> "↑  jlloc dump " + p.appName();
-                case "LOAD"                -> "↑  jlloc fix " + p.appName();
-                case "HOST_MEMORY_PRESSURE"-> "↑  jlloc explain " + p.appName();
-                default                    -> "↑  elevated";
+                case "LEAK"                -> "^  jlloc dump " + p.appName();
+                case "LOAD"                -> "^  jlloc fix " + p.appName();
+                case "HOST_MEMORY_PRESSURE"-> "^  jlloc explain " + p.appName();
+                default                    -> "^  elevated";
             };
             default -> "";
         };
