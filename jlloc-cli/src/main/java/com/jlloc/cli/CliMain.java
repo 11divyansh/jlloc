@@ -6,6 +6,10 @@ import com.jlloc.common.protocol.Response;
 import com.jlloc.common.protocol.*;
 
 import java.io.*;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,6 +28,10 @@ public class CliMain {
         if (args.length == 0) {
             printUsage();
             System.exit(1);
+        }
+
+        if ("metrics".equalsIgnoreCase(args[0])) {
+            System.exit(runMetrics());
         }
 
         Command command = parseCommand(args);
@@ -288,6 +296,138 @@ public class CliMain {
         return bytes + "B";
     }
 
+    static int runMetrics() {
+        return runMetrics(
+                Path.of(System.getProperty("user.home"), ".jlloc", "metrics.info"),
+                HttpClient.newBuilder()
+                        .connectTimeout(java.time.Duration.ofSeconds(2))
+                        .build());
+    }
+
+    static int runMetrics(Path metricsInfoFile, HttpClient client) {
+        MetricsEndpoint endpoint;
+        try {
+            endpoint = readMetricsEndpoint(metricsInfoFile);
+        } catch (IOException e) {
+            System.err.println("jlloc metrics endpoint is unavailable.");
+            System.err.println("Start the daemon first: ./gradlew :jlloc-daemon:run");
+            return 1;
+        }
+
+        HttpRequest request = HttpRequest.newBuilder(endpoint.uri())
+                .timeout(java.time.Duration.ofSeconds(2))
+                .GET()
+                .build();
+
+        try {
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            MetricsHealth health = assessMetricsResponse(response);
+
+            System.out.println();
+            System.out.println("jlloc metrics");
+            System.out.println("  endpoint: " + endpoint.uri());
+            System.out.println("  status:   " + (health.healthy ? "UP" : "DOWN"));
+            System.out.println("  scrape:   " + response.statusCode() + " " + health.summary);
+            if (health.healthy) {
+                System.out.println("  families: " + health.families);
+                System.out.println("  series:   " + health.series);
+            } else if (health.problem != null) {
+                System.out.println("  problem:  " + health.problem);
+            }
+            System.out.println();
+            return health.healthy ? 0 : 1;
+        } catch (Exception e) {
+            System.out.println();
+            System.out.println("jlloc metrics");
+            System.out.println("  endpoint: " + endpoint.uri());
+            System.out.println("  status:   DOWN");
+            System.out.println("  problem:  " + e.getMessage());
+            System.out.println();
+            return 1;
+        }
+    }
+
+    private static MetricsEndpoint readMetricsEndpoint(Path metricsInfoFile) throws IOException {
+        String bind = "127.0.0.1";
+        int port = 8001;
+
+        if (Files.exists(metricsInfoFile)) {
+            for (String line : Files.readAllLines(metricsInfoFile)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
+                }
+                int idx = trimmed.indexOf('=');
+                if (idx <= 0) {
+                    continue;
+                }
+                String key = trimmed.substring(0, idx).trim();
+                String value = trimmed.substring(idx + 1).trim();
+                if ("bind".equalsIgnoreCase(key) && !value.isBlank()) {
+                    bind = value;
+                } else if ("port".equalsIgnoreCase(key) && !value.isBlank()) {
+                    port = Integer.parseInt(value);
+                }
+            }
+        }
+
+        return new MetricsEndpoint(URI.create("http://" + bind + ":" + port + "/metrics"));
+    }
+
+    private static MetricsHealth assessMetricsResponse(HttpResponse<String> response) {
+        if (response.statusCode() != 200) {
+            return new MetricsHealth(false, 0, 0, "HTTP " + response.statusCode(),
+                    "non-200 response");
+        }
+
+        String body = response.body() == null ? "" : response.body();
+        if (body.isBlank()) {
+            return new MetricsHealth(false, 0, 0, "empty scrape", "empty body");
+        }
+
+        int families = 0;
+        int series = 0;
+        String currentFamily = null;
+        java.util.Set<String> closedFamilies = new java.util.HashSet<>();
+
+        for (String line : body.lines().map(String::trim).filter(line -> !line.isEmpty()).toList()) {
+            if (line.startsWith("# HELP ") || line.startsWith("# TYPE ")) {
+                String[] parts = line.split("\\s+", 4);
+                if (parts.length >= 3) {
+                    String family = parts[2];
+                    if (!family.equals(currentFamily)) {
+                        if (currentFamily != null) {
+                            closedFamilies.add(currentFamily);
+                        }
+                        if (closedFamilies.contains(family)) {
+                            return new MetricsHealth(false, families, series, "invalid grouping",
+                                    "metric family " + family + " reappeared after another family started");
+                        }
+                        currentFamily = family;
+                        families++;
+                    }
+                }
+                continue;
+            }
+
+            if (line.startsWith("#")) {
+                continue;
+            }
+
+            if (!line.matches("^[a-zA-Z_:][a-zA-Z0-9_:]*(\\{.*\\})? [-+]?\\d+(?:\\.\\d+)?$")) {
+                return new MetricsHealth(false, families, series, "invalid series",
+                        "bad Prometheus line: " + line);
+            }
+            series++;
+        }
+
+        if (families == 0 || series == 0) {
+            return new MetricsHealth(false, families, series, "missing metric families", "no usable series in scrape");
+        }
+
+        return new MetricsHealth(true, families, series, "ok", null);
+    }
+
     private static void printUsage() {
         System.out.println("Usage: jlloc <command> [options]");
         System.out.println();
@@ -296,6 +436,13 @@ public class CliMain {
         System.out.println("  explain <service>       Full diagnosis for one service");
         System.out.println("  dump <service>          Trigger a heap dump");
         System.out.println("  fix <service>           Resize heap (Phase 6 — CRaC)");
+        System.out.println();
+        System.out.println("  metrics                 Check daemon /metrics endpoint");
+        System.out.println();
+        System.out.println("Daemon metrics:");
+        System.out.println("  /metrics                Prometheus scrape endpoint");
+        System.out.println("  Default: http://127.0.0.1:8001/metrics");
+        System.out.println("  Env: JLLOC_METRICS_PORT, JLLOC_METRICS_BIND");
         System.out.println();
         System.out.println("Examples:");
         System.out.println("  jlloc status");
@@ -308,4 +455,8 @@ public class CliMain {
         System.err.println(message);
         return null;
     }
+
+    private record MetricsEndpoint(URI uri) {}
+
+    private record MetricsHealth(boolean healthy, int families, int series, String summary, String problem) {}
 }

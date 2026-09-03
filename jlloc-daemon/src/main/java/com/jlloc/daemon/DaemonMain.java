@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The daemon's real entry point.
@@ -27,11 +28,17 @@ public class DaemonMain {
         ProfileStore profileStore = new ProfileStore();
         JvmProcessWatcher watcher = new JvmProcessWatcher();
         HeapMonitor heapMonitor = new HeapMonitor(repository);
+        MetricsServer metricsServer = new MetricsServer(repository);
         boolean debugMode = "true".equalsIgnoreCase(System.getenv("JLLOC_DEBUG"));
+        AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
         DaemonSocketServer socketServer = new DaemonSocketServer(repository);
         socketServer.start();
         out("[jlloc-daemon] socket server listening on port " + socketServer.getPort());
+
+        metricsServer.start();
+        out("[jlloc-daemon] metrics server listening on http://"
+                + metricsServer.getBindAddress() + ":" + metricsServer.getPort() + "/metrics");
 
         heapMonitor.onAlert(event -> printAlert(event.record(), event.diagnosis()));
 
@@ -77,8 +84,63 @@ public class DaemonMain {
                 () -> printStatus(repository, debugMode),
                 30, 30, TimeUnit.SECONDS);
 
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (!shuttingDown.compareAndSet(false, true)) {
+                return;
+            }
+            stopQuietly(statusScheduler);
+            stopQuietly(heapMonitor);
+            stopQuietly(watcher);
+            stopQuietly(metricsServer);
+            stopQuietly(socketServer);
+        }, "jlloc-shutdown"));
+
         out("[jlloc-daemon] watching for JVMs (Ctrl+C to exit)");
         Thread.currentThread().join();
+    }
+
+    private static void stopQuietly(AutoCloseable closeable) {
+        try {
+            if (closeable != null) {
+                closeable.close();
+            }
+        } catch (Exception ignored) {
+            // Shutdown should be best-effort; the JVM is exiting.
+        }
+    }
+
+    private static void stopQuietly(HeapMonitor monitor) {
+        if (monitor != null) {
+            monitor.stop();
+        }
+    }
+
+    private static void stopQuietly(JvmProcessWatcher watcher) {
+        if (watcher != null) {
+            watcher.stop();
+        }
+    }
+
+    private static void stopQuietly(DaemonSocketServer socketServer) {
+        try {
+            if (socketServer != null) {
+                socketServer.stop();
+            }
+        } catch (Exception ignored) {
+            // Best-effort shutdown.
+        }
+    }
+
+    private static void stopQuietly(MetricsServer metricsServer) {
+        if (metricsServer != null) {
+            metricsServer.stop();
+        }
+    }
+
+    private static void stopQuietly(ScheduledExecutorService scheduler) {
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+        }
     }
 
     private static void printStarted(ProcessRepository.ProcessRecord record) {

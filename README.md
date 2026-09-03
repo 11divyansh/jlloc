@@ -7,6 +7,9 @@ process on one machine without manually tuning `-Xmx` for each one or
 running out of memory. jlloc watches every JVM on your machine and
 allocates heap automatically — zero config.
 
+The daemon also exposes a Prometheus-style `/metrics` endpoint for
+existing scrapers and autoscalers.
+
 > Status: early development (v0.1 in progress). Not yet usable.
 
 ## Repo layout
@@ -47,6 +50,12 @@ Java modules (requires JDK 21):
 ```bash
 ./gradlew build
 ```
+
+Daemon metrics endpoint defaults:
+
+- `http://127.0.0.1:8001/metrics`
+- `JLLOC_METRICS_PORT` overrides the port
+- `JLLOC_METRICS_BIND` overrides the bind address
 
 Native module (requires CMake + a C++17 compiler):
 
