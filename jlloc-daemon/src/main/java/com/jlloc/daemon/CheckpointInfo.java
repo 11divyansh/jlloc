@@ -4,8 +4,8 @@ import java.nio.file.Path;
 import java.time.Instant;
 
 /**
- * Metadata about a CRaC checkpoint for one JVM process.
- * Populated by the CracManager in Phase 4. Until then,
+ * Metadata about a future CRaC checkpoint for one JVM process.
+ * Populated by the checkpoint/restore pipeline once that phase ships.
  * ProcessRepository holds a null here.
  *
  * checkpointDir:       where the checkpoint image lives on disk

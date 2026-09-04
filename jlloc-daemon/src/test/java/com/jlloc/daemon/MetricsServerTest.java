@@ -73,6 +73,11 @@ class MetricsServerTest {
             assertTrue(body.contains("# TYPE jlloc_heap_used_ratio gauge"));
             assertTrue(body.contains("jlloc_heap_used_ratio{app=\"demo-service\",pid=\"4242\"} 0.5"));
             assertTrue(body.contains("jlloc_diagnosis{app=\"demo-service\",pid=\"4242\",diagnosis=\"HEALTHY\"} 1"));
+            assertTrue(body.contains("# HELP jlloc_service_scaling_decision"));
+            assertTrue(body.contains("jlloc_service_process_count{service=\"demo-service\"} 1"));
+            assertTrue(body.contains("jlloc_service_heap_used_ratio{service=\"demo-service\"} 0.5"));
+            assertTrue(body.contains("jlloc_service_diagnosis{service=\"demo-service\",severity=\"NORMAL\",diagnosis=\"HEALTHY\"} 1"));
+            assertTrue(body.contains("jlloc_service_scaling_decision{service=\"demo-service\",axis=\"HOLD\",direction=\"NONE\",recommendation=\"NOTHING_REQUIRED\"} 1"));
 
             assertPrometheusFamiliesAreGrouped(body);
             assertPrometheusSeriesAreSyntacticallyValid(body);

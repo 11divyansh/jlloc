@@ -11,7 +11,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Serves jlloc's current diagnosis state as Prometheus-format metrics,
@@ -168,6 +171,7 @@ public class MetricsServer {
         // "don't touch heap, the host/container is the problem"
         // (HOST_MEMORY_PRESSURE). Severity alone can't express that.
         appendDiagnosisFamily(sb, records);
+        appendServiceRollupFamilies(sb, records);
 
         return sb.toString();
     }
@@ -210,10 +214,196 @@ public class MetricsServer {
         for (String line : lines) sb.append(line).append('\n');
     }
 
+    private void appendServiceRollupFamilies(StringBuilder sb, List<ProcessRepository.ProcessRecord> records) {
+        List<ServiceRollup> services = rollupServices(records);
+
+        appendServiceFamily(sb, "jlloc_service_process_count", "gauge",
+                "Number of JVMs contributing to the service rollup", services,
+                rollup -> (double) rollup.processCount);
+
+        appendServiceFamily(sb, "jlloc_service_heap_used_bytes", "gauge",
+                "Total heap used bytes across the service rollup", services,
+                rollup -> (double) rollup.totalHeapUsedBytes);
+
+        appendServiceFamily(sb, "jlloc_service_heap_max_bytes", "gauge",
+                "Total heap max bytes across the service rollup", services,
+                rollup -> (double) rollup.totalHeapMaxBytes);
+
+        appendServiceFamily(sb, "jlloc_service_heap_used_ratio", "gauge",
+                "Total heap used bytes divided by total heap max bytes for the service rollup",
+                services, rollup -> {
+                    if (rollup.totalHeapMaxBytes <= 0) return null;
+                    return rollup.totalHeapUsedBytes * 1.0 / rollup.totalHeapMaxBytes;
+                });
+
+        appendServiceFamily(sb, "jlloc_service_rss_bytes", "gauge",
+                "Total RSS bytes across the service rollup", services,
+                rollup -> (double) rollup.totalRssBytes);
+
+        appendServiceFamily(sb, "jlloc_service_container_limit_bytes", "gauge",
+                "Total container memory limit bytes across the service rollup", services,
+                rollup -> rollup.totalContainerLimitBytes > 0 ? (double) rollup.totalContainerLimitBytes : null);
+
+        appendServiceFamily(sb, "jlloc_service_container_pressure", "gauge",
+                "Total RSS divided by total container limit for the service rollup", services,
+                rollup -> {
+                    if (rollup.totalContainerLimitBytes <= 0) return null;
+                    return rollup.totalRssBytes * 1.0 / rollup.totalContainerLimitBytes;
+                });
+
+        appendServiceDiagnosisFamily(sb, services);
+        appendServiceScalingFamily(sb, services);
+    }
+
     private String formatSeries(String name, ProcessRepository.ProcessRecord r, double value) {
         String app = appNameOf(r);
         return String.format("%s{app=\"%s\",pid=\"%d\"} %s",
                 name, escapeLabelValue(app), r.pid(), formatValue(value));
+    }
+
+    private interface ServiceMetricValueFn {
+        Double valueFor(ServiceRollup rollup);
+    }
+
+    private void appendServiceFamily(StringBuilder sb, String name, String type, String help,
+                                     List<ServiceRollup> services, ServiceMetricValueFn fn) {
+        List<String> lines = new ArrayList<>();
+        for (ServiceRollup rollup : services) {
+            Double value = fn.valueFor(rollup);
+            if (value == null) continue;
+            lines.add(String.format("%s{service=\"%s\"} %s",
+                    name, escapeLabelValue(rollup.serviceName), formatValue(value)));
+        }
+        if (lines.isEmpty()) return;
+
+        sb.append("# HELP ").append(name).append(' ').append(help).append('\n');
+        sb.append("# TYPE ").append(name).append(' ').append(type).append('\n');
+        for (String line : lines) sb.append(line).append('\n');
+    }
+
+    private void appendServiceDiagnosisFamily(StringBuilder sb, List<ServiceRollup> services) {
+        List<String> lines = new ArrayList<>();
+        for (ServiceRollup rollup : services) {
+            if (rollup.worstDiagnosis == null) continue;
+            lines.add(String.format(
+                    "jlloc_service_diagnosis{service=\"%s\",severity=\"%s\",diagnosis=\"%s\"} 1",
+                    escapeLabelValue(rollup.serviceName),
+                    escapeLabelValue(rollup.worstDiagnosis.severity().name()),
+                    escapeLabelValue(rollup.worstDiagnosis.diagnosis().name())));
+        }
+        if (lines.isEmpty()) return;
+
+        sb.append("# HELP jlloc_service_diagnosis Current service-level diagnosis category, value always 1 (info-style metric)\n");
+        sb.append("# TYPE jlloc_service_diagnosis gauge\n");
+        for (String line : lines) sb.append(line).append('\n');
+    }
+
+    private void appendServiceScalingFamily(StringBuilder sb, List<ServiceRollup> services) {
+        List<String> lines = new ArrayList<>();
+        ScalingPolicyEngine policyEngine = new ScalingPolicyEngine();
+
+        for (ServiceRollup rollup : services) {
+            ScalingPolicyEngine.ScalingDecision decision = policyEngine.decide(
+                    rollup.worstDiagnosis,
+                    rollup.worstSignal,
+                    rollup.serviceName);
+            lines.add(String.format(
+                    "jlloc_service_scaling_decision{service=\"%s\",axis=\"%s\",direction=\"%s\",recommendation=\"%s\"} 1",
+                    escapeLabelValue(rollup.serviceName),
+                    escapeLabelValue(decision.axis().name()),
+                    escapeLabelValue(decision.direction().name()),
+                    escapeLabelValue(decision.recommendationId().name())));
+        }
+
+        if (lines.isEmpty()) return;
+
+        sb.append("# HELP jlloc_service_scaling_decision Service-level scaling contract: axis, direction, and recommendation ID\n");
+        sb.append("# TYPE jlloc_service_scaling_decision gauge\n");
+        for (String line : lines) sb.append(line).append('\n');
+    }
+
+    private List<ServiceRollup> rollupServices(List<ProcessRepository.ProcessRecord> records) {
+        Map<String, List<ProcessRepository.ProcessRecord>> grouped = new LinkedHashMap<>();
+        for (ProcessRepository.ProcessRecord record : records) {
+            grouped.computeIfAbsent(appNameOf(record), key -> new ArrayList<>()).add(record);
+        }
+
+        List<ServiceRollup> services = new ArrayList<>();
+        for (Map.Entry<String, List<ProcessRepository.ProcessRecord>> entry : grouped.entrySet()) {
+            services.add(ServiceRollup.from(entry.getKey(), entry.getValue()));
+        }
+        return services;
+    }
+
+    private record ServiceRollup(
+            String serviceName,
+            int processCount,
+            long totalHeapUsedBytes,
+            long totalHeapMaxBytes,
+            long totalRssBytes,
+            long totalContainerLimitBytes,
+            DiagnosisResult worstDiagnosis,
+            MemorySignal worstSignal
+    ) {
+        private static ServiceRollup from(String serviceName, List<ProcessRepository.ProcessRecord> records) {
+            int processCount = records.size();
+            long totalHeapUsedBytes = 0;
+            long totalHeapMaxBytes = 0;
+            long totalRssBytes = 0;
+            long totalContainerLimitBytes = 0;
+            ProcessRepository.ProcessRecord worstRecord = null;
+
+            for (ProcessRepository.ProcessRecord record : records) {
+                if (record.heapStats() != null) {
+                    totalHeapUsedBytes += record.heapStats().usedBytes();
+                    totalHeapMaxBytes += record.heapStats().maxBytes();
+                }
+                if (record.lastSignal() != null) {
+                    if (record.lastSignal().isRssAvailable()) {
+                        totalRssBytes += Math.max(0, record.lastSignal().rssBytes());
+                    }
+                    if (record.lastSignal().isContainerSignalAvailable()) {
+                        totalContainerLimitBytes += Math.max(0, record.lastSignal().containerMemoryLimitBytes());
+                    }
+                }
+                worstRecord = worstOf(worstRecord, record);
+            }
+
+            DiagnosisResult worstDiagnosis = worstRecord != null ? worstRecord.diagnosis() : null;
+            MemorySignal worstSignal = worstRecord != null ? worstRecord.lastSignal() : null;
+
+            return new ServiceRollup(
+                    serviceName,
+                    processCount,
+                    totalHeapUsedBytes,
+                    totalHeapMaxBytes,
+                    totalRssBytes,
+                    totalContainerLimitBytes,
+                    worstDiagnosis,
+                    worstSignal
+            );
+        }
+
+        private static ProcessRepository.ProcessRecord worstOf(
+                ProcessRepository.ProcessRecord left,
+                ProcessRepository.ProcessRecord right) {
+            if (left == null) return right;
+            if (right == null) return left;
+
+            int leftSeverity = left.diagnosis() != null ? severityLevel(left.diagnosis().severity()) : -1;
+            int rightSeverity = right.diagnosis() != null ? severityLevel(right.diagnosis().severity()) : -1;
+            if (leftSeverity != rightSeverity) {
+                return leftSeverity > rightSeverity ? left : right;
+            }
+
+            double leftHeap = left.heapStats() != null ? left.heapStats().usedPercentOfMax() : -1;
+            double rightHeap = right.heapStats() != null ? right.heapStats().usedPercentOfMax() : -1;
+            if (leftHeap != rightHeap) {
+                return leftHeap > rightHeap ? left : right;
+            }
+
+            return left.pid() <= right.pid() ? left : right;
+        }
     }
 
     private static String appNameOf(ProcessRepository.ProcessRecord r) {

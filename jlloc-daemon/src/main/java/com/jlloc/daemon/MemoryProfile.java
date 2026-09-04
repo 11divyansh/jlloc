@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
  * Persistent, per-app historical memory record, stored to
  * ~/.jlloc/profiles/<appName>.json between runs.
  *
- * Populated by the ProfileStore in Phase 6. Until then,
+ * Populated by the ProfileStore in Phase 5. Until then,
  * ProcessRepository holds a null here and BudgetEngine uses
  * hardcoded defaults.
  *

@@ -435,7 +435,7 @@ public class CliMain {
         System.out.println("  status                  Show all monitored JVMs");
         System.out.println("  explain <service>       Full diagnosis for one service");
         System.out.println("  dump <service>          Trigger a heap dump");
-        System.out.println("  fix <service>           Resize heap (Phase 6 — CRaC)");
+        System.out.println("  fix <service>           Resize heap (future checkpoint/restore)");
         System.out.println();
         System.out.println("  metrics                 Check daemon /metrics endpoint");
         System.out.println();
