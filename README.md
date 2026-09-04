@@ -24,7 +24,6 @@ hand from a generic `src/`.
 | `jlloc-daemon` | Java | Background service: detects JVMs, tracks memory, decides heap budgets |
 | `jlloc-agent` | Java | Tiny agent injected into every JVM via `-javaagent` |
 | `jlloc-cli` | Java | `jlloc status` / `jlloc logs` developer-facing commands |
-| `jlloc-native` | C++ | JVMTI agent for low-level heap/safepoint work (later phases) |
 | `jlloc-wrapper` | Shell | Drop-in replacement for the `java` command |
 | `scripts` | Shell | Install/build/uninstall scripts |
 | `docs` | Markdown | Design notes, architecture docs |
