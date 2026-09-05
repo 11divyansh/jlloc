@@ -43,6 +43,21 @@ This creates `gradlew`, `gradlew.bat`, and `gradle/wrapper/`. Commit
 those — after that, nobody else ever needs Gradle installed locally,
 they just run `./gradlew build`.
 
+## First use
+
+The preferred local-dev entrypoint is the wrapper script:
+
+```powershell
+.\scripts\jlloc.ps1 start
+.\scripts\jlloc.ps1 status
+.\scripts\jlloc.ps1 metrics
+.\scripts\jlloc.ps1 explain <service>
+.\scripts\jlloc.ps1 stop
+```
+
+That wrapper builds the local distributions if needed, starts the
+daemon, and forwards CLI commands to the packaged binaries.
+
 ## Building
 
 Java modules (requires JDK 21):

@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.io.ObjectInputFilter;
 
 /**
  * The daemon's socket server. Listens for CLI connections, reads a
@@ -83,6 +84,8 @@ public class DaemonSocketServer {
              ObjectInputStream in = new ObjectInputStream(client.getInputStream());
              ObjectOutputStream out = new ObjectOutputStream(client.getOutputStream())) {
 
+            in.setObjectInputFilter(ObjectInputFilter.Config.createFilter(
+                    "com.jlloc.common.protocol.*;java.util.*;java.lang.*;java.time.*;!*"));
             Command command = (Command) in.readObject();
             Response response;
             try {
@@ -256,10 +259,11 @@ public class DaemonSocketServer {
     }
 
     private Response handleFix(String service, int targetHeapMb) {
-        // CRaC integration comes in Phase 4 — placeholder for now
-        // so the protocol is complete and the CLI can call this
+        // Future checkpoint/restore automation will use this protocol slot.
+        // For now the command exists so the CLI and daemon stay aligned.
         return new ErrorResponse(
-                "jlloc fix is not yet implemented (Phase 4 — CRaC integration). "
+                "jlloc fix is not yet implemented. "
+                        + "Future checkpoint/restore automation will use this command. "
                         + "Run 'jlloc dump " + service + "' to capture a heap dump now.");
     }
 
