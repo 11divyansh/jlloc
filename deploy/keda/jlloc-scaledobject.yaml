@@ -1,0 +1,16 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: jlloc-demo
+spec:
+  scaleTargetRef:
+    name: demo-service
+  pollingInterval: 30
+  cooldownPeriod: 300
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        metricName: jlloc_service_scaling_decision
+        query: max by (service) (jlloc_service_scaling_decision{axis="HORIZONTAL",recommendation="SCALE_HORIZONTALLY"})
+        threshold: "1"
