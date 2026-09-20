@@ -14,6 +14,10 @@ allprojects {
 subprojects {
     apply plugin: 'java'
 
+    dependencyLocking {
+        lockAllConfigurations()
+    }
+
     java {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
@@ -23,16 +27,13 @@ subprojects {
         useJUnitPlatform()
     }
 
+    tasks.withType(AbstractArchiveTask).configureEach {
+        preserveFileTimestamps = false
+        reproducibleFileOrder = true
+    }
+
     dependencies {
         testImplementation platform('org.junit:junit-bom:5.10.2')
         testImplementation 'org.junit.jupiter:junit-jupiter'
     }
-}
-
-// Distribution archives must be byte-for-byte reproducible for a given
-// source tree and dependency lock state. This removes filesystem timestamps
-// and makes archive entry ordering deterministic.
-tasks.withType(AbstractArchiveTask).configureEach {
-    preserveFileTimestamps = false
-    reproducibleFileOrder = true
 }

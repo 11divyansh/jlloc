@@ -70,6 +70,7 @@ class MetricsServerTest {
 
             String body = response.body();
             assertTrue(body.contains("# HELP jlloc_heap_used_ratio"));
+            assertTrue(body.contains("jlloc_metrics_schema_info{schema=\"1\",product_version=\"0.1.0\"} 1"));
             assertTrue(body.contains("# TYPE jlloc_heap_used_ratio gauge"));
             assertTrue(body.contains("jlloc_heap_used_ratio{app=\"demo-service\",pid=\"4242\"} 0.5"));
             assertTrue(body.contains("jlloc_diagnosis{app=\"demo-service\",pid=\"4242\",diagnosis=\"HEALTHY\"} 1"));
@@ -78,6 +79,12 @@ class MetricsServerTest {
             assertTrue(body.contains("jlloc_service_heap_used_ratio{service=\"demo-service\"} 0.5"));
             assertTrue(body.contains("jlloc_service_diagnosis{service=\"demo-service\",severity=\"NORMAL\",diagnosis=\"HEALTHY\"} 1"));
             assertTrue(body.contains("jlloc_service_scaling_decision{service=\"demo-service\",axis=\"HOLD\",direction=\"NONE\",recommendation=\"NOTHING_REQUIRED\"} 1"));
+
+            HttpRequest versionedRequest = HttpRequest.newBuilder()
+                    .uri(URI.create("http://127.0.0.1:" + server.getPort() + "/metrics/v1"))
+                    .GET()
+                    .build();
+            assertEquals(200, client.send(versionedRequest, HttpResponse.BodyHandlers.ofString()).statusCode());
 
             assertPrometheusFamiliesAreGrouped(body);
             assertPrometheusSeriesAreSyntacticallyValid(body);
