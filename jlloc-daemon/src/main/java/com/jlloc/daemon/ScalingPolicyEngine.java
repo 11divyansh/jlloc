@@ -31,12 +31,17 @@ public class ScalingPolicyEngine {
 
     public ScalingDecision decide(DiagnosisResult diagnosis, MemorySignal signal, String appName) {
         if (diagnosis == null || diagnosis.recommendationId() == null) {
-            return new ScalingDecision(
-                    ScalingAxis.HOLD,
-                    ScalingDirection.NONE,
-                    RecommendationId.COLLECT_MORE_SIGNALS,
-                    "Not enough signal to choose a scaling motion yet."
-            );
+            return hold(RecommendationId.COLLECT_MORE_SIGNALS, "Not enough signal to choose a scaling motion yet.");
+        }
+
+        // Scaling is an advisory contract. Never publish a positive scaling
+        // motion while the diagnosis is uncertain, warming up, or lacks the
+        // samples needed to support a stable decision.
+        if (signal == null || signal.sampleCount() < DiagnosisEngine.MIN_SAMPLES
+                || diagnosis.diagnosis() == DiagnosisResult.Diagnosis.UNKNOWN
+                || diagnosis.diagnosis() == DiagnosisResult.Diagnosis.WARMUP) {
+            return hold(RecommendationId.COLLECT_MORE_SIGNALS,
+                    "Hold scaling: evidence is insufficient or the process is still warming up.");
         }
 
         return switch (diagnosis.recommendationId()) {
@@ -70,5 +75,9 @@ public class ScalingPolicyEngine {
                             : "No scaling action needed for " + appName + "."
             );
         };
+    }
+
+    private ScalingDecision hold(RecommendationId recommendationId, String rationale) {
+        return new ScalingDecision(ScalingAxis.HOLD, ScalingDirection.NONE, recommendationId, rationale);
     }
 }

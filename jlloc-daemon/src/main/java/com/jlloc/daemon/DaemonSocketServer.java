@@ -9,6 +9,7 @@ import oshi.SystemInfo;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -37,10 +38,14 @@ public class DaemonSocketServer {
     private final ProcessRepository repository;
     private final ServerSocket serverSocket;
     private final ExecutorService executor;
+    private final String authToken;
 
     public DaemonSocketServer(ProcessRepository repository) throws IOException {
         this.repository = repository;
-        this.serverSocket = new ServerSocket(0); // 0 = OS assigns a free port
+        // Bind explicitly to loopback. Authentication is defense in depth,
+        // not a reason to expose the command socket to the network.
+        this.serverSocket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        this.authToken = LocalAuth.createToken();
         this.executor = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "jlloc-socket-handler");
             t.setDaemon(true);
@@ -63,6 +68,7 @@ public class DaemonSocketServer {
     public void stop() throws IOException {
         serverSocket.close();
         Files.deleteIfExists(PORT_FILE);
+        Files.deleteIfExists(LocalAuth.TOKEN_FILE);
         executor.shutdownNow();
     }
 
@@ -81,11 +87,23 @@ public class DaemonSocketServer {
 
     private void handleClient(Socket client) {
         try (client;
-             ObjectInputStream in = new ObjectInputStream(client.getInputStream());
-             ObjectOutputStream out = new ObjectOutputStream(client.getOutputStream())) {
+             DataInputStream authIn = new DataInputStream(client.getInputStream());
+             DataOutputStream authOut = new DataOutputStream(client.getOutputStream())) {
+
+            client.setSoTimeout(5000);
+            String presentedToken = authIn.readUTF();
+            if (!LocalAuth.equalsToken(authToken, presentedToken)) {
+                return;
+            }
+            authOut.writeUTF(ProtocolConstants.PROTOCOL_VERSION);
+            authOut.flush();
+
+            try (ObjectInputStream in = new ObjectInputStream(client.getInputStream());
+                 ObjectOutputStream out = new ObjectOutputStream(client.getOutputStream())) {
 
             in.setObjectInputFilter(ObjectInputFilter.Config.createFilter(
-                    "com.jlloc.common.protocol.*;java.util.*;java.lang.*;java.time.*;!*"));
+                    "maxdepth=12;maxrefs=1000;maxbytes=1048576;"
+                            + "com.jlloc.common.protocol.*;java.util.*;java.lang.*;java.time.*;!*"));
             Command command = (Command) in.readObject();
             Response response;
             try {
@@ -101,6 +119,7 @@ public class DaemonSocketServer {
             }
             out.writeObject(response);
             out.flush();
+            }
 
         } catch (Exception e) {
             // Client disconnected or sent garbage, not worth logging
@@ -136,7 +155,8 @@ public class DaemonSocketServer {
             // whole status response.
         }
 
-        return new StatusResponse(summaries, totalRam, availableRam, "0.1.0");
+        return new StatusResponse(summaries, totalRam, availableRam,
+                ProtocolConstants.PRODUCT_VERSION);
     }
 
     private Response handleExplain(String service) {

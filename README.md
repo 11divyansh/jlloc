@@ -68,6 +68,7 @@ Java modules (requires JDK 21):
 Daemon metrics endpoint defaults:
 
 - `http://127.0.0.1:8001/metrics`
+- Versioned scrape path: `http://127.0.0.1:8001/metrics/v1`
 - `JLLOC_METRICS_PORT` overrides the port
 - `JLLOC_METRICS_BIND` overrides the bind address
 
@@ -80,5 +81,9 @@ cmake --build build
 ```
 
 ## License
+
+Operational guidance, release packaging, and real-environment test procedures
+are in [`docs/operations.md`](docs/operations.md) and
+[`docs/real_environment_testing.md`](docs/real_environment_testing.md).
 
 [Apache 2.0](LICENSE) (open-source, enterprise-friendly)

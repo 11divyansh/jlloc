@@ -80,12 +80,25 @@ public class CliMain {
         }
 
         try (Socket socket = new Socket("127.0.0.1", port);
-             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
-             ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+             DataOutputStream authOut = new DataOutputStream(socket.getOutputStream());
+             DataInputStream authIn = new DataInputStream(socket.getInputStream())) {
+
+            socket.setSoTimeout(5000);
+            authOut.writeUTF(LocalAuth.readToken());
+            authOut.flush();
+            String protocolVersion = authIn.readUTF();
+            if (!ProtocolConstants.PROTOCOL_VERSION.equals(protocolVersion)) {
+                System.err.println("Incompatible jlloc daemon protocol: " + protocolVersion);
+                return null;
+            }
+
+            try (ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+                 ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
 
             out.writeObject(command);
             out.flush();
             return (Response) in.readObject();
+            }
 
         } catch (Exception e) {
             System.err.println("Failed to connect to daemon: " + e.getMessage());

@@ -15,6 +15,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import com.jlloc.common.protocol.ProtocolConstants;
 
 /**
  * Serves jlloc's current diagnosis state as Prometheus-format metrics,
@@ -49,6 +50,7 @@ public class MetricsServer {
         this.bindAddress = bindAddress;
         this.server = HttpServer.create(new InetSocketAddress(bindAddress, port), 0);
         this.server.createContext("/metrics", new MetricsHandler());
+        this.server.createContext("/metrics/v1", new MetricsHandler());
         this.server.setExecutor(null);
     }
 
@@ -132,6 +134,14 @@ public class MetricsServer {
         List<ProcessRepository.ProcessRecord> records = List.copyOf(repository.all());
 
         StringBuilder sb = new StringBuilder();
+
+        sb.append("# HELP jlloc_metrics_schema_info Metrics contract version (use /metrics/v1 for an explicit endpoint)\n");
+        sb.append("# TYPE jlloc_metrics_schema_info gauge\n");
+        sb.append("jlloc_metrics_schema_info{schema=\"")
+                .append(ProtocolConstants.METRICS_SCHEMA_VERSION)
+                .append("\",product_version=\"")
+                .append(ProtocolConstants.PRODUCT_VERSION)
+                .append("\"} 1\n");
 
         appendFamily(sb, "jlloc_heap_used_ratio", "gauge",
                 "Ratio of heap memory used to maximum heap", records, r -> {
