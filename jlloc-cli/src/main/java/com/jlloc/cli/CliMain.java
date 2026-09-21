@@ -57,9 +57,6 @@ public class CliMain {
             case "dump"    -> args.length > 1
                     ? new DumpCommand(args[1])
                     : fail("dump requires a service name: jlloc dump <service>");
-            case "fix"     -> args.length > 1
-                    ? new FixCommand(args[1], 0)
-                    : fail("fix requires a service name: jlloc fix <service>");
             default -> {
                 System.err.println("Unknown command: " + args[0]);
                 yield null;
@@ -266,7 +263,7 @@ public class CliMain {
         };
     }
 
-    // dump / fix
+    // dump
 
     private static int formatDump(DumpResponse r) {
         System.out.printf("Heap dump written: %s (%s)%n",
@@ -293,7 +290,7 @@ public class CliMain {
             case "CRITICAL" -> "!! act now";
             case "WARNING"  -> switch (p.diagnosis()) {
                 case "LEAK"                -> "^  jlloc dump " + p.appName();
-                case "LOAD"                -> "^  jlloc fix " + p.appName();
+                case "LOAD"                -> "^  review -Xmx or scale out; run jlloc explain " + p.appName();
                 case "HOST_MEMORY_PRESSURE"-> "^  jlloc explain " + p.appName();
                 default                    -> "^  elevated";
             };
@@ -448,12 +445,12 @@ public class CliMain {
         System.out.println("  status                  Show all monitored JVMs");
         System.out.println("  explain <service>       Full diagnosis for one service");
         System.out.println("  dump <service>          Trigger a heap dump");
-        System.out.println("  fix <service>           Resize heap (future checkpoint/restore)");
         System.out.println();
         System.out.println("  metrics                 Check daemon /metrics endpoint");
         System.out.println();
         System.out.println("Daemon metrics:");
-        System.out.println("  /metrics                Prometheus scrape endpoint");
+        System.out.println("  /metrics                Prometheus scrape endpoint (compatibility alias)");
+        System.out.println("  /metrics/v1             Versioned Prometheus scrape endpoint");
         System.out.println("  Default: http://127.0.0.1:8001/metrics");
         System.out.println("  Env: JLLOC_METRICS_PORT, JLLOC_METRICS_BIND");
         System.out.println();

@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.io.ObjectInputFilter;
 
 /**
@@ -256,10 +257,17 @@ public class DaemonSocketServer {
 
         long pid = record.get().pid();
         Path dumpDir = Path.of(System.getProperty("user.home"), ".jlloc", "dumps");
+        String appName = record.get().classification() != null
+                ? record.get().classification().appName() : service;
+        String safeName = sanitizeDumpName(appName);
 
         try {
             Files.createDirectories(dumpDir);
-            Path dumpFile = dumpDir.resolve(service + "-" + System.currentTimeMillis() + ".hprof");
+            Path dumpFile = dumpDir.resolve(safeName + "-" + System.currentTimeMillis() + ".hprof")
+                    .toAbsolutePath().normalize();
+            if (!dumpFile.getParent().equals(dumpDir.toAbsolutePath().normalize())) {
+                return new ErrorResponse("Invalid heap dump filename.");
+            }
 
             // Use jcmd to trigger the heap dump — ships with every JDK,
             // no extra tooling required
@@ -268,9 +276,16 @@ public class DaemonSocketServer {
                     "GC.heap_dump", dumpFile.toAbsolutePath().toString())
                     .redirectErrorStream(true)
                     .start();
-            proc.waitFor();
+            if (!proc.waitFor(120, TimeUnit.SECONDS)) {
+                proc.destroyForcibly();
+                return new ErrorResponse("Heap dump timed out for " + service + ".");
+            }
 
             long size = Files.exists(dumpFile) ? Files.size(dumpFile) : 0;
+            if (proc.exitValue() != 0 || size == 0) {
+                return new ErrorResponse("Heap dump failed for " + service
+                        + " (jcmd exit=" + proc.exitValue() + ").");
+            }
             return new DumpResponse(service, dumpFile.toAbsolutePath().toString(), size);
 
         } catch (Exception e) {
@@ -285,6 +300,13 @@ public class DaemonSocketServer {
                 "jlloc fix is not yet implemented. "
                         + "Future checkpoint/restore automation will use this command. "
                         + "Run 'jlloc dump " + service + "' to capture a heap dump now.");
+    }
+
+    private static String sanitizeDumpName(String value) {
+        String safe = value == null ? "unknown" : value.replaceAll("[^A-Za-z0-9._-]+", "_");
+        safe = safe.replaceAll("^\\.+$", "unknown");
+        if (safe.isBlank()) safe = "unknown";
+        return safe.length() > 80 ? safe.substring(0, 80) : safe;
     }
 
     /**

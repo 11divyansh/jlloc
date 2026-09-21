@@ -68,10 +68,10 @@ public class RecommendationEngine {
                             + "Immediate action: reduce total JVM memory footprint to free physical RAM.\n"
                             + "Do NOT increase -Xmx — more heap makes swap thrashing worse.\n"
                             + "Options:\n"
-                            + "  1. jlloc fix " + appName + "  (restarts with reduced heap via CRaC)\n"
+                            + "  1. Review the diagnosis and restart manually with a smaller heap\n"
                             + "  2. Increase container memory limit\n"
                             + "  3. Reduce the number of JVMs running on this host",
-                    "jlloc fix " + appName
+                    null
             );
 
             case COLLECT_MORE_SIGNALS -> new Recommendation(
@@ -132,7 +132,7 @@ public class RecommendationEngine {
                     "OOM imminent — restart with more heap.",
                     "Heap is critically full and GC cannot keep up. "
                             + "Restart this service with a larger -Xmx immediately.",
-                    "jlloc fix " + appName
+                    null
             );
         }
 
@@ -151,7 +151,7 @@ public class RecommendationEngine {
                 RecommendationId.INCREASE_XMX,
                 "High load — consider increasing -Xmx.",
                 advice,
-                "jlloc fix " + appName
+                null
         );
     }
 
@@ -169,7 +169,7 @@ public class RecommendationEngine {
                                 + "The JVM reserved too much for heap and starved off-heap.",
                         signal.isContainerSignalAvailable() ? signal.containerMemoryPressure() * 100 : 0.0,
                         signal.heapUsedRatio() * 100),
-                "jlloc fix " + appName
+                null
         );
     }
 
