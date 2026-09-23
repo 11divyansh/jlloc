@@ -139,7 +139,6 @@ switch ($Args[0].ToLowerInvariant()) {
     "metrics" { exit (Invoke-CLI @("metrics")) }
     "explain" { exit (Invoke-CLI $Args) }
     "dump" { exit (Invoke-CLI $Args) }
-    "fix" { exit (Invoke-CLI $Args) }
     default {
         exit (Invoke-CLI $Args)
     }

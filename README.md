@@ -1,16 +1,16 @@
 # jlloc
 
-Automatic JVM heap monitoring, diagnostic and management for local development.
+JVM memory monitoring and explainable diagnosis for local development.
 
 Run multiple Java services, Elasticsearch, ActiveMQ, and any other JVM
-process on one machine without manually tuning `-Xmx` for each one or
-running out of memory. jlloc watches every JVM on your machine and
-allocates heap automatically — zero config.
+process on one machine without manually correlating JVM and host memory
+signals. jlloc watches every JVM on your machine and
+explains what is happening; it does not resize or restart services automatically.
 
 The daemon also exposes a Prometheus-style `/metrics` endpoint for
 existing scrapers and autoscalers.
 
-> Status: early development (v0.1 in progress). Not yet usable.
+> Status: v0.1 release candidate. Linux-first, local CLI tool for explainable JVM memory diagnosis.
 
 ## Repo layout
 
@@ -30,17 +30,17 @@ hand from a generic `src/`.
 
 ## First-time setup
 
-This repo doesn't ship the Gradle wrapper jar yet (it needs to be
-generated once with a local Gradle install, then committed). After
-cloning, run:
+The Gradle wrapper is committed. After cloning, use:
 
 ```bash
-gradle wrapper --gradle-version 8.7
+./gradlew build
 ```
 
-This creates `gradlew`, `gradlew.bat`, and `gradle/wrapper/`. Commit
-those — after that, nobody else ever needs Gradle installed locally,
-they just run `./gradlew build`.
+The v0.1 scope is intentionally CLI-first: jlloc does not restart services,
+mutate Kubernetes resources, or provide a dashboard.
+
+The wrapper files are committed; after that, nobody else needs Gradle
+installed locally, they just run `./gradlew build`.
 
 ## First use
 
@@ -72,13 +72,8 @@ Daemon metrics endpoint defaults:
 - `JLLOC_METRICS_PORT` overrides the port
 - `JLLOC_METRICS_BIND` overrides the bind address
 
-Native module (requires CMake + a C++17 compiler):
-
-```bash
-cd jlloc-native
-cmake -B build
-cmake --build build
-```
+Release packaging and real-environment validation are documented in
+`docs/release_checklist.md` and `docs/real_environment_testing.md`.
 
 ## License
 
